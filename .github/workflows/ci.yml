@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - name: 安装依赖
+        run: pip install -r requirements.txt
+      - name: 语法检查
+        run: |
+          python -m py_compile \
+            settings.py app.py agent_loop.py retrieval.py chunks.py \
+            query_rewrite.py evidence_verify.py pipeline.py storage.py \
+            evaluate.py eval_retrieval.py
+      - name: 后端单元测试
+        run: python -m unittest discover -s tests -v
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: client/package-lock.json
+      - name: 安装依赖
+        run: npm ci
+        working-directory: client
+      - name: 前端测试
+        run: npm test
+        working-directory: client

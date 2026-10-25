@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>视频 RAG 问答</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, "Microsoft YaHei", sans-serif;
+      background: #f5f6f8;
+      display: flex;
+      justify-content: center;
+      min-height: 100vh;
+      padding: 24px;
+    }
+    .container {
+      width: 100%;
+      max-width: 720px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+    header {
+      background: #fff;
+      border-radius: 12px;
+      padding: 20px 24px;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+    }
+    header h1 { font-size: 20px; color: #1a1a1a; }
+    header p { font-size: 13px; color: #888; margin-top: 6px; }
+
+    /* 视频播放器 + 选视频 */
+    .video-box { background: #fff; border-radius: 12px; padding: 16px; box-shadow: 0 1px 4px rgba(0,0,0,0.06); }
+    .video-box video { width: 100%; border-radius: 8px; background: #000; max-height: 300px; }
+    .video-box .pick-video {
+      display: block; width: 100%; padding: 12px; margin-top: 10px;
+      background: #f0f4ff; border: 1px dashed #4f6ef7; border-radius: 8px;
+      color: #4f6ef7; font-size: 13px; cursor: pointer; text-align: center;
+    }
+    .video-box .video-name { font-size: 12px; color: #888; margin-top: 8px; text-align: center; }
+
+    /* 模式切换 */
+    .mode-row { display: flex; gap: 10px; }
+    .mode-btn {
+      flex: 1; padding: 10px; border: 1px solid #ddd; border-radius: 10px;
+      background: #fff; font-size: 13px; cursor: pointer; color: #666;
+    }
+    .mode-btn.active { background: #4f6ef7; color: #fff; border-color: #4f6ef7; }
+
+    .chat {
+      background: #fff;
+      border-radius: 12px;
+      padding: 20px 24px;
+      min-height: 320px;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+    .msg { max-width: 85%; padding: 10px 14px; border-radius: 10px; line-height: 1.6; font-size: 14px; white-space: pre-wrap; }
+    .msg.user { align-self: flex-end; background: #4f6ef7; color: #fff; }
+    .msg.bot { align-self: flex-start; background: #f0f1f5; color: #1a1a1a; }
+    .hits { margin-top: 8px; font-size: 12px; color: #666; }
+    .hits .hit {
+      background: #fafafa; border-left: 3px solid #4f6ef7;
+      padding: 6px 10px; margin-top: 6px; border-radius: 4px;
+    }
+    .hits .hit .ts {
+      color: #4f6ef7; font-weight: 600; cursor: pointer;
+      text-decoration: underline; text-decoration-style: dotted;
+    }
+    .hits .hit .src {
+      display: inline-block; font-size: 10px; padding: 1px 6px; border-radius: 8px;
+      margin-left: 4px; vertical-align: middle;
+    }
+    .src.asr { background: #e3f2fd; color: #1565c0; }
+    .src.ocr { background: #fff3e0; color: #e65100; }
+
+    .input-row { display: flex; gap: 10px; }
+    #question {
+      flex: 1; padding: 12px 14px; border: 1px solid #ddd;
+      border-radius: 10px; font-size: 14px; outline: none;
+    }
+    #question:focus { border-color: #4f6ef7; }
+    #send {
+      padding: 12px 22px; background: #4f6ef7; color: #fff;
+      border: none; border-radius: 10px; font-size: 14px; cursor: pointer;
+    }
+    #send:disabled { background: #b0b8d9; cursor: not-allowed; }
+    .loading { color: #999; font-size: 13px; }
+
+    /* 多用户登录区 */
+    .auth-bar { display: flex; align-items: center; gap: 10px; margin-top: 12px; }
+    .auth-user { font-size: 13px; color: #555; }
+    .auth-btn {
+      padding: 6px 14px; border: 1px solid #4f6ef7; border-radius: 8px;
+      background: #fff; color: #4f6ef7; font-size: 12px; cursor: pointer;
+    }
+    .auth-btn.primary { background: #4f6ef7; color: #fff; }
+    .auth-form { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+    .auth-form input {
+      padding: 8px 10px; border: 1px solid #ddd; border-radius: 8px;
+      font-size: 13px; outline: none; flex: 1; min-width: 120px;
+    }
+    .auth-form input:focus { border-color: #4f6ef7; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>视频 RAG 问答</h1>
+      <p>选一个视频，问问题，回答会附带带时间戳的证据，点时间戳可跳转到视频对应位置。</p>
+      <!-- 多用户登录区（session 存 Redis，登录后任务记录归属该用户） -->
+      <div class="auth-bar" id="auth-bar">
+        <span class="auth-user" id="auth-user">未登录（匿名）</span>
+        <button class="auth-btn" id="auth-btn" onclick="toggleAuth()">登录 / 注册</button>
+        <button class="auth-btn" id="logout-btn" onclick="logout()" style="display:none">登出</button>
+      </div>
+      <div class="auth-form" id="auth-form" style="display:none">
+        <input id="auth-username" type="text" placeholder="用户名" />
+        <input id="auth-password" type="password" placeholder="密码（至少6位）" />
+        <button class="auth-btn primary" onclick="login()">登录</button>
+        <button class="auth-btn" onclick="register()">注册</button>
+      </div>
+    </header>
+
+    <!-- 视频播放器（本地选视频，点时间戳跳转） -->
+    <div class="video-box">
+      <video id="player" controls></video>
+      <input type="file" id="video-input" accept="video/*" style="display:none" />
+      <div class="pick-video" id="pick-video">📂 点这里选择本地视频（如泛式那期 mp4）</div>
+      <div class="video-name" id="video-name">未选择视频</div>
+    </div>
+
+    <!-- 模式切换：普通 RAG vs AgentLoop -->
+    <div class="mode-row">
+      <button class="mode-btn active" id="mode-rag" onclick="setMode('rag')">普通 RAG（单轮）</button>
+      <button class="mode-btn" id="mode-agent" onclick="setMode('agent')">AgentLoop（带自审）</button>
+    </div>
+
+    <div class="chat" id="chat"></div>
+
+    <div class="input-row">
+      <input id="question" type="text" placeholder="例如：视频里提到了哪家公司？" />
+      <button id="send" onclick="ask()">提问</button>
+    </div>
+  </div>
+
+  <script>
+    // [面试] 当前模式：'rag' 走 /ask，'agent' 走 /ask_agent
+    let MODE = 'rag';
+    function setMode(m) {
+      MODE = m;
+      document.getElementById('mode-rag').classList.toggle('active', m === 'rag');
+      document.getElementById('mode-agent').classList.toggle('active', m === 'agent');
+    }
+
+    // ---------- 视频播放器：本地选视频 ----------
+    const player = document.getElementById('player');
+    const videoInput = document.getElementById('video-input');
+    const videoName = document.getElementById('video-name');
+    document.getElementById('pick-video').addEventListener('click', () => videoInput.click());
+    videoInput.addEventListener('change', function() {
+      if (videoInput.files.length) {
+        // [面试] URL.createObjectURL 把本地文件变成可播放的临时 URL，纯前端，不经过后端
+        player.src = URL.createObjectURL(videoInput.files[0]);
+        videoName.textContent = '已加载：' + videoInput.files[0].name;
+      }
+    });
+
+    // [面试] 点时间戳 → 视频跳到对应秒（start 是毫秒，除以 1000 得秒）
+    function jumpTo(ms) {
+      if (!player.src) { alert('请先在上面选择本地视频，才能跳转'); return; }
+      player.currentTime = ms / 1000;
+      player.play();
+    }
+
+    // [面试] 把 start 毫秒 格式化成 mm:ss
+    function fmt(ms) {
+      const sec = Math.floor(ms / 1000);
+      const mm = String(Math.floor(sec / 60)).padStart(2, '0');
+      const ss = String(sec % 60).padStart(2, '0');
+      return mm + ':' + ss;
+    }
+
+    // [面试] 证据来源标签：asr=语音，ocr=画面字幕
+    function srcTag(source) {
+      if (source === 'ocr') return '<span class="src ocr">画面字幕</span>';
+      return '<span class="src asr">语音</span>';
+    }
+
+    // [面试] 核心：提问 → 按当前模式调 /ask 或 /ask_agent
+    async function ask() {
+      const input = document.getElementById('question');
+      const q = input.value.trim();
+      if (!q) return;
+
+      const chat = document.getElementById('chat');
+      const modeLabel = MODE === 'agent' ? ' [AgentLoop]' : '';
+      chat.innerHTML += '<div class="msg user">' + q + '</div>';
+
+      const btn = document.getElementById('send');
+      btn.disabled = true;
+      chat.innerHTML += '<div class="loading">思考中' + (MODE === 'agent' ? '（Planner→Executor→Critic 多轮）' : '') + '...</div>';
+
+      try {
+        const url = MODE === 'agent' ? '/ask_agent' : '/ask';
+        const resp = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ question: q })
+        });
+        const data = await resp.json();
+        chat.querySelectorAll('.loading').forEach(e => e.remove());
+
+        if (data.error) {
+          chat.innerHTML += '<div class="msg bot">出错了：' + data.error + '</div>';
+        } else {
+          let html = '';
+          // AgentLoop 返回结构不一样：result.title + result.conclusions + evidence
+          if (MODE === 'agent' && data.result) {
+            html += '<div class="msg bot"><b>' + data.result.title + '</b>\n';
+            (data.result.conclusions || []).forEach(c => { html += '· ' + c + '\n'; });
+            html += '\n<i>（Critic ' + (data.critique && data.critique.passed ? '通过' : '未通过') + '，共 ' + data.rounds + ' 轮）</i></div>';
+            renderHits(data.result.evidence || []);
+          } else {
+            html = '<div class="msg bot">' + data.answer + '</div>';
+            renderHits(data.hits || []);
+          }
+          chat.innerHTML += html;
+        }
+      } catch (err) {
+        chat.querySelectorAll('.loading').forEach(e => e.remove());
+        chat.innerHTML += '<div class="msg bot">请求失败：' + err + '</div>';
+      }
+
+      btn.disabled = false;
+      input.value = '';
+      chat.scrollTop = chat.scrollHeight;
+    }
+
+    // [面试] 渲染证据列表：带来源标签 + 可点击跳转的时间戳
+    // 兼容两种结构：/ask 的 {start,text,source} 和 /ask_agent 的 {timestampMs,content,source}
+    function renderHits(hits) {
+      if (!hits || !hits.length) return;
+      const chat = document.getElementById('chat');
+      let html = '<div class="hits">命中证据：';
+      hits.forEach(h => {
+        const ms = h.start !== undefined ? h.start : (h.timestampMs || 0);
+        const text = h.text !== undefined ? h.text : (h.content || '');
+        const source = (h.source || 'asr').toLowerCase();
+        html += '<div class="hit">'
+          + '<span class="ts" onclick="jumpTo(' + ms + ')">[' + fmt(ms) + ']</span>'
+          + srcTag(source)
+          + ' ' + text + '</div>';
+      });
+      html += '</div>';
+      chat.innerHTML += html;
+      chat.scrollTop = chat.scrollHeight;
+    }
+
+    // 回车也能提问
+    document.getElementById('question').addEventListener('keydown', function(e) {
+      if (e.key === 'Enter') ask();
+    });
+
+    // ---------- 多用户登录 ----------
+    // [面试] 登录态：进页面先查 /me，已登录就显示用户名，否则匿名
+    async function refreshAuth() {
+      try {
+        const r = await fetch('/me');
+        const d = await r.json();
+        const userEl = document.getElementById('auth-user');
+        const logoutBtn = document.getElementById('logout-btn');
+        const authBtn = document.getElementById('auth-btn');
+        if (d.loggedIn) {
+          userEl.textContent = '已登录：' + d.username;
+          logoutBtn.style.display = '';
+          authBtn.textContent = '切换账号';
+        } else {
+          userEl.textContent = '未登录（匿名）';
+          logoutBtn.style.display = 'none';
+          authBtn.textContent = '登录 / 注册';
+        }
+      } catch (e) { /* 忽略 */ }
+    }
+    function toggleAuth() {
+      const f = document.getElementById('auth-form');
+      f.style.display = f.style.display === 'none' ? 'flex' : 'none';
+    }
+    async function login() {
+      const u = document.getElementById('auth-username').value.trim();
+      const p = document.getElementById('auth-password').value;
+      const r = await fetch('/login', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: u, password: p })
+      });
+      const d = await r.json();
+      if (d.error) { alert('登录失败：' + d.error); return; }
+      document.getElementById('auth-form').style.display = 'none';
+      document.getElementById('auth-password').value = '';
+      refreshAuth();
+    }
+    async function register() {
+      const u = document.getElementById('auth-username').value.trim();
+      const p = document.getElementById('auth-password').value;
+      const r = await fetch('/register', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: u, password: p })
+      });
+      const d = await r.json();
+      if (d.error) { alert('注册失败：' + d.error); return; }
+      alert('注册成功，请登录');
+    }
+    async function logout() {
+      await fetch('/logout', { method: 'POST' });
+      refreshAuth();
+    }
+    // 进页面先刷新登录态
+    refreshAuth();
+  </script>
+</body>
+</html>

@@ -1,0 +1,48 @@
+# 密钥与配置（绝不提交）
+.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# 本地数据库（SQLite 开发用，生产走 MySQL）
+*.db
+*.db-journal
+
+# 评测产物与临时文件
+evaluation_report.json
+_*.txt
+_*.log
+
+# 转写 / OCR / 调试中间产物
+sentences.json
+frames_ocr.json
+raw_result.json
+
+# 面试与内部记录（本地保留，不进公开仓库）
+docs/面试讲稿.md
+面试备战_Java全栈.md
+PROGRESS.md
+
+# 前端（Vue/Vite）
+client/node_modules/
+client/dist/
+
+# 视频与转写产物（大文件，本地生成）
+frames/
+*.mp4
+*.mkv
+*.mov
+*.avi
+*.flv
+*.wav
+*.mp3
+*.m4a
+
+# IDE / 系统
+.idea/
+.vscode/
+.DS_Store

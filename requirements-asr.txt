@@ -1,0 +1,4 @@
+# 视频上传后自动解析（ASR）需要额外安装
+# 模型本体约 484MB，只在需要转写时下载；不装也能跑问答
+-r requirements.txt
+faster-whisper==1.2.1
