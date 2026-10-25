@@ -168,9 +168,9 @@ onMounted(refreshAuth)
     <div class="bg-layer"><span class="grid"></span><span class="orb o1"></span><span class="orb o2"></span></div>
     <div class="auth-card">
       <div class="auth-brand">
-        <div class="logo">V</div>
-        <h1>VideoRAG</h1>
-        <p>长视频内容理解 · 多模态 RAG 问答</p>
+        <div class="logo">AI</div>
+        <h1>AI视频分析平台</h1>
+        <p>长视频内容理解 · 音视频证据检索与问答</p>
       </div>
 
       <div class="auth-tabs">
@@ -197,10 +197,10 @@ onMounted(refreshAuth)
 
     <header class="topbar">
       <div class="brand-mini">
-        <div class="logo small">V</div>
+        <div class="logo small">AI</div>
         <div class="brand-text">
-          <span class="brand-name">VideoRAG</span>
-          <span class="brand-sub">多模态视频理解</span>
+          <span class="brand-name">AI视频分析平台</span>
+          <span class="brand-sub">音视频证据检索与问答</span>
         </div>
       </div>
       <div class="topbar-right">
