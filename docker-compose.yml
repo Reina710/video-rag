@@ -1,4 +1,62 @@
+# 一套 compose 起全部：app + mysql + redis + qdrant + minio
+#
+#   cp .env.example .env      # 填 DASHSCOPE_KEY / DEEPSEEK_KEY
+#   docker compose up -d      # 构建并启动
+#   docker compose ps         # 看健康状态
+#
+# 单独跑本地开发时不用这套：直接 python app.py，默认连 127.0.0.1 的中间件。
+# 容器里则由下面的 environment 把地址改成服务名（qdrant / redis / minio）。
+name: video-rag
+
 services:
+  app:
+    build:
+      context: .
+      args:
+        # 只做问答演示、不需要上传视频解析时，改成 0 可以少装 faster-whisper
+        WITH_ASR: "${WITH_ASR:-1}"
+    container_name: video-rag-app
+    ports:
+      - "8001:8001"
+    env_file:
+      - .env
+    environment:
+      # 监听 0.0.0.0，否则容器外访问不到（本地直接跑仍是 127.0.0.1）
+      HOST: "0.0.0.0"
+      PORT: "8001"
+      # 服务名替代 127.0.0.1：容器里的 127.0.0.1 指的是容器自己
+      REDIS_HOST: redis
+      MINIO_ENDPOINT: minio:9000
+      QDRANT_HOST: qdrant
+      QDRANT_PORT: "6333"
+      STORAGE: sqlite
+      # whisper 模型放卷里的固定子目录；卷为空时会退回按名字自动下载
+      WHISPER_MODEL_PATH: /models/small
+    volumes:
+      # 上传的视频和解析中间产物
+      - ./uploads:/app/uploads
+      # ASR 词表（改 data/hotwords.txt 不用重建镜像，重启即可生效）
+      - ./data:/app/data
+      # SQLite 库：宿主机文件必须已存在，否则 docker 会建成目录
+      - ./video_rag.db:/app/video_rag.db
+      # whisper 模型缓存：第一次自动下载，之后复用，不随镜像重建丢失
+      - whisper_models:/models
+    depends_on:
+      redis:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+      minio:
+        condition: service_started
+    restart: unless-stopped
+    healthcheck:
+      # 基础镜像里没有 curl，用解释器自带的标准库探活，少装一个包
+      test: ["CMD", "python", "-c", "import urllib.request as u; r = u.urlopen('http://127.0.0.1:8001/health', timeout=4); raise SystemExit(0 if r.status == 200 else 1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
+
   mysql:
     image: mysql:8.0
     container_name: mysql
@@ -10,6 +68,12 @@ services:
     volumes:
       - mysql_data:/var/lib/mysql
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-p123456"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 40s
 
   redis:
     image: redis:7.4-alpine
@@ -19,6 +83,11 @@ services:
     volumes:
       - redis_data:/data
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
 
   qdrant:
     image: qdrant/qdrant:v1.18.2
@@ -29,6 +98,12 @@ services:
     volumes:
       - qdrant_storage:/qdrant/storage
     restart: unless-stopped
+    healthcheck:
+      # 镜像里没有 curl，用 bash 的 /dev/tcp 探一下端口
+      test: ["CMD-SHELL", "bash -c ':> /dev/tcp/127.0.0.1/6333' || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
 
   minio:
     image: cgr.dev/chainguard/minio:latest
@@ -53,3 +128,5 @@ volumes:
     name: qdrant_storage
   minio_data:
     name: minio_data
+  whisper_models:
+    name: video_rag_whisper

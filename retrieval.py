@@ -65,7 +65,7 @@ _CLIENTS = {}
 def _qdrant():
     if "q" not in _CLIENTS:
         from qdrant_client import QdrantClient
-        _CLIENTS["q"] = QdrantClient(host="127.0.0.1", port=6333)
+        _CLIENTS["q"] = QdrantClient(**settings.qdrant_kwargs())
     return _CLIENTS["q"]
 
 

@@ -93,7 +93,8 @@ for seg in segments:
     sentences.append({
         "start": int(seg.start * 1000),
         "end": int(seg.end * 1000),
-        "text": seg.text.strip(),
+        # 输出层纠错：按 data/asr_fixups.txt 把已知错字换回来
+        "text": asr_lexicon.correct(seg.text.strip()),
     })
 
 if not sentences:

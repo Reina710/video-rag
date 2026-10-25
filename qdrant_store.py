@@ -38,7 +38,7 @@ def embed(text):
     return resp.data[0].embedding
 
 # ---------- 2. 连 Qdrant ----------
-client = QdrantClient(host="127.0.0.1", port=6333)
+client = QdrantClient(**settings.qdrant_kwargs())
 
 COLLECTION = "video_sentences"
 if client.collection_exists(COLLECTION):

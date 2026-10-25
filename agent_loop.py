@@ -47,7 +47,7 @@ deepseek_key = settings.get("DEEPSEEK_KEY")
 
 embed_client = OpenAI(api_key=dashscope_key, base_url="https://dashscope.aliyuncs.com/compatible-mode/v1")
 chat_client = OpenAI(api_key=deepseek_key, base_url="https://api.deepseek.com")
-qdrant = QdrantClient(host="127.0.0.1", port=6333)
+qdrant = QdrantClient(**settings.qdrant_kwargs())
 
 COLLECTION = "video_sentences"
 MAX_ROUNDS = 2   # 最多跑2轮，防死循环+烧钱

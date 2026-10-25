@@ -26,6 +26,8 @@ import time
 import uuid
 
 import storage
+import settings
+import asr_lexicon
 
 
 # Windows 上 httpx 会读系统代理设置（注册表里的 Internet Options），
@@ -51,14 +53,17 @@ _OPENAI = None
 
 
 def _model_path():
-    """优先读环境变量，其次用原来写死的本地路径，最后退回 "small" 让库自己下。"""
+    """模型位置：环境变量 > 项目内 models/ 目录 > 让库按名字自己下。
+
+    容器里由 compose 注入 WHISPER_MODEL_PATH=/models/small（挂载卷，重建镜像不重下）。
+    本地放 ./models/ 也能直接用，不再依赖某台机器上的绝对路径。
+    """
     env = os.environ.get("WHISPER_MODEL_PATH", "")
     if env and os.path.exists(env):
         return env
-    fallback = (r"C:\Users\11651\tools\whisper-models\models"
-                r"\pengzhendong--faster-whisper-small\snapshots\master")
-    if os.path.exists(fallback):
-        return fallback
+    local = os.path.join(BASE, "models")
+    if os.path.exists(local):
+        return local
     return "small"
 
 
@@ -155,16 +160,23 @@ def transcribe(video_path):
     try:
         _extract_wav(video_path, wav)
         audio = _load_wav(wav)
-        segments, _info = model.transcribe(
-            audio,
-            language="zh",
-            vad_filter=False,
-            beam_size=5,
-            condition_on_previous_text=False,
-        )
+        hot = asr_lexicon.hotwords()
+        kwargs = dict(language="zh", vad_filter=False, beam_size=5,
+                      condition_on_previous_text=False)
+        if hot:
+            # 热词偏置：把专有名词（番剧名、人名）提前告诉解码器。
+            # 只影响新转写，已经索引过的视频不会重跑。
+            kwargs["hotwords"] = hot
+        try:
+            segments, _info = model.transcribe(audio, **kwargs)
+        except TypeError:
+            # 老版本 faster-whisper（<1.0）没有 hotwords 参数，退回不加热词
+            kwargs.pop("hotwords", None)
+            segments, _info = model.transcribe(audio, **kwargs)
         out = []
         for seg in segments:
-            text = (seg.text or "").strip()
+            # 输出层纠错：小模型对热词不一定买账，这里按错字表再兜一层
+            text = asr_lexicon.correct((seg.text or "").strip())
             if text:
                 out.append({
                     "start": int(seg.start * 1000),
@@ -281,7 +293,7 @@ def _index(video_id, asr, ocr):
     from qdrant_client import QdrantClient
     from qdrant_client.models import Distance, VectorParams, PointStruct
 
-    client = QdrantClient(host="127.0.0.1", port=6333)
+    client = QdrantClient(**settings.qdrant_kwargs())
     if not client.collection_exists(COLLECTION):
         client.create_collection(
             collection_name=COLLECTION,

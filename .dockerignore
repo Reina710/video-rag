@@ -1,0 +1,15 @@
+# 构建镜像时不需要的东西（前端产物 client/dist 要保留，Flask 靠它托管页面）
+.git
+.gitignore
+.env
+__pycache__/
+*.py[cod]
+*.log
+client/node_modules/
+uploads/
+_chunks/
+video_rag.db
+docs/
+tests/
+_*.py
+*.md

@@ -16,8 +16,11 @@
 import json
 import io
 import os
+import re
 import time
 import uuid
+from functools import wraps
+
 from flask import Flask, request, jsonify, render_template, session, Response, stream_with_context
 from openai import OpenAI
 from qdrant_client import QdrantClient
@@ -52,6 +55,8 @@ settings.load_env()
 app = Flask(__name__)
 # 密钥从环境变量读，缺失时给一个开发占位（生产必须覆盖）
 app.secret_key = os.environ.get("SECRET_KEY", "video-rag-dev-secret")
+# 单次请求体上限：分片是 5MB 一片不受影响，挡住匿名/恶意超大上传
+app.config["MAX_CONTENT_LENGTH"] = int(os.environ.get("MAX_UPLOAD_MB", "2048")) * 1024 * 1024
 app.config["SESSION_TYPE"] = "redis"
 app.config["SESSION_REDIS"] = redis.Redis(
     host=os.environ.get("REDIS_HOST", "127.0.0.1"),
@@ -78,7 +83,7 @@ chat_client = OpenAI(
     timeout=120,
     max_retries=3,      # 长回答容易超时，同样重试
 )
-qdrant = QdrantClient(host="127.0.0.1", port=6333)
+qdrant = QdrantClient(**settings.qdrant_kwargs())
 
 # Redis 除会话外，还有两个真实用途：热点缓存 + 限流。
 # 复用 app.config 里那个 SESSION_REDIS 连接，不另起连接。
@@ -98,11 +103,83 @@ UPLOAD_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "uploads")
 CHUNK_DIR = os.path.join(UPLOAD_DIR, "_chunks")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
-# 确保 bucket 存在（bucket 相当于"一个放文件的文件夹"）
-if not minio_client.bucket_exists(MINIO_BUCKET):
-    minio_client.make_bucket(MINIO_BUCKET)
+# 确保 bucket 存在（bucket 相当于"一个放文件的文件夹"）。
+# 容器里 app 可能比 MinIO 先起来，这时连不上会直接抛异常把进程带走，
+# 所以重试几次；仍然失败就只告警不退出——服务能起，等 MinIO 好了上传自然能用。
+def _ensure_bucket(attempts=5, base_sleep=2.0):
+    for i in range(attempts):
+        try:
+            if not minio_client.bucket_exists(MINIO_BUCKET):
+                minio_client.make_bucket(MINIO_BUCKET)
+            return True
+        except Exception as e:
+            if i == attempts - 1:
+                print("[app] MinIO 不可用（%s），上传功能暂不可用" % type(e).__name__)
+                return False
+            time.sleep(base_sleep * (i + 1))
+
+
+_ensure_bucket()
 
 COLLECTION = "video_sentences"
+
+
+# ------------------------------------------------------------
+# 鉴权：认证（有没有登录）+ 授权（这条数据是不是你的）
+# ------------------------------------------------------------
+# 只做前者会有个典型漏洞：任何登录用户把请求里的 mediaId 改成别人的，
+# 就能问别人视频里的内容——这叫水平越权（IDOR）。所以每个带 id 的接口
+# 都要落到「这条记录属于当前用户」这一步。
+#
+# 校验失败统一回 404 而不是 403：403 等于告诉攻击者「这个 id 存在，只是不给你」，
+# 404 不泄露资源是否存在，也没法用来枚举别人的视频。
+_UPLOAD_ID_RE = re.compile(r"^[0-9a-f]{16}$")
+
+
+def login_required(fn):
+    """没登录直接 401，不进业务逻辑（也就不烧 LLM 的钱）。"""
+    @wraps(fn)
+    def wrapper(*args, **kwargs):
+        if not session.get("user_id"):
+            return jsonify({"error": "请先登录", "code": "UNAUTHORIZED"}), 401
+        return fn(*args, **kwargs)
+    return wrapper
+
+
+def _require_owned_media(raw_media_id, user_id):
+    """校验 mediaId 存在且属于当前用户。返回 (media_id, None) 或 (None, (body, status))。"""
+    if not raw_media_id:
+        return None, ({"error": "请先选择一个视频", "code": "MEDIA_REQUIRED"}, 400)
+    try:
+        vid = int(raw_media_id)
+    except (TypeError, ValueError):
+        return None, ({"error": "mediaId 不合法"}, 400)
+    v = storage.query_video(vid)
+    if not v or v.get("user_id") != user_id:
+        return None, ({"error": "视频不存在"}, 404)
+    return vid, None
+
+
+def _chunk_dir_owned(upload_id, user_id):
+    """分片目录 + 归属校验。
+
+    uploadId 是客户端传来的，直接拼路径会被 `../` 穿越到别的目录，
+    所以先按 16 位十六进制校验格式。上传时把 user_id 写进 _meta.json，
+    后续分片/查询/合并都认这一个主人。
+    """
+    if not upload_id or not _UPLOAD_ID_RE.match(upload_id):
+        return None, ({"error": "uploadId 不存在"}, 404)
+    d = os.path.join(CHUNK_DIR, upload_id)
+    meta_path = os.path.join(d, "_meta.json")
+    if not os.path.exists(meta_path):
+        return None, ({"error": "uploadId 不存在"}, 404)
+    try:
+        owner = json.load(open(meta_path, encoding="utf-8")).get("user_id")
+    except (OSError, ValueError):
+        owner = None
+    if owner != user_id:
+        return None, ({"error": "uploadId 不存在"}, 404)
+    return d, None
 
 
 # 关键词兜底检索：Qdrant 挂了时的降级方案。
@@ -273,12 +350,18 @@ def assets(filename):
 # AgentLoop 版问答：走 Planner -> Executor -> Critic 闭环（最多2轮），
 # 区别于 /ask 的单轮 RAG。返回结构化产物 + 审核结果。
 @app.route("/api/ask_agent", methods=["POST"])
+@login_required
 def ask_agent():
     data = request.get_json(silent=True) or {}
     question = data.get("question", "").strip()
-    media_id = data.get("mediaId")
     if not question:
         return jsonify({"error": "question 不能为空"}), 400
+
+    # 授权：视频必须是自己的，否则换一个 mediaId 就能读别人的视频内容
+    user_id = session["user_id"]
+    media_id, err = _require_owned_media(data.get("mediaId"), user_id)
+    if err:
+        return jsonify(err[0]), err[1]
 
     # 多轮追问改写（和 /api/ask 同一套）
     from query_rewrite import rewrite
@@ -317,7 +400,7 @@ def ask_agent():
         answer_mode="agent",
         rounds=result.get("rounds", 1),
         cost_ms=cost_ms,
-        user_id=session.get("user_id"),
+        user_id=user_id,
     )
     # 缓存 Agent 结果（同 question 命中直接返回，省多轮 LLM 的钱）
     _cache_set(cache_key, json.dumps(result, ensure_ascii=False))
@@ -328,12 +411,18 @@ def ask_agent():
 # 实时推给前端，前端展示「Agent 正在做什么」——对应原项目 DOVideo-AI 的实时进度推送。
 # 核心：run_agent 加 on_event 回调，这里把回调事件转成 SSE 的 data 行。
 @app.route("/api/ask_agent_stream", methods=["POST"])
+@login_required
 def ask_agent_stream():
     data = request.get_json(silent=True) or {}
     question = data.get("question", "").strip()
-    media_id = data.get("mediaId")
     if not question:
         return jsonify({"error": "question 不能为空"}), 400
+
+    # 校验必须在 return Response(...) 之前，否则 401 会被包进 SSE 流里发出去
+    user_id = session["user_id"]
+    media_id, err = _require_owned_media(data.get("mediaId"), user_id)
+    if err:
+        return jsonify(err[0]), err[1]
 
     user_key = str(session.get("user_id") or request.remote_addr or "anon")
     if not _rate_limit_allow(user_key):
@@ -402,7 +491,7 @@ def ask_agent_stream():
             answer_mode="agent",
             rounds=result.get("rounds", 1),
             cost_ms=0,
-            user_id=session.get("user_id"),
+            user_id=user_id,
         )
         yield "data: %s\n\n" % json.dumps(
             {"stage": "done", "result": result}, ensure_ascii=False)
@@ -419,6 +508,7 @@ def ask_agent_stream():
 
 # 反馈接口：用户点"满意/不满意"，存进 feedback 表，算 userAcceptanceRate 的数据源
 @app.route("/api/feedback", methods=["POST"])
+@login_required
 def feedback():
     data = request.get_json(silent=True) or {}
     task_id = data.get("task_id")
@@ -426,11 +516,15 @@ def feedback():
     comment = data.get("comment", "")
     if rating not in (1, -1):
         return jsonify({"error": "rating 必须是 1(满意) 或 -1(不满意)"}), 400
+    task = storage.query_task(task_id)
+    if not task or task.get("user_id") != session["user_id"]:
+        return jsonify({"error": "任务不存在"}), 404
     storage.record_feedback(task_id, rating, comment)
     return jsonify({"ok": True, "rating": rating})
 
 
 @app.route("/api/stats", methods=["GET"])
+@login_required
 def stats():
     """统计接口：返回最近任务 + 用户接受率，前端统计页用（多用户时按登录用户过滤）。"""
     user_id = session.get("user_id")
@@ -491,14 +585,19 @@ def me():
 
 
 @app.route("/api/ask", methods=["POST"])
+@login_required
 def ask():
     # 前端可能没传 question，或传了非字符串，都要兜住，别让服务崩
     data = request.get_json(silent=True) or {}
     question = data.get("question", "").strip()
-    media_id = data.get("mediaId")
     history = data.get("history") or []
     if not question:
         return jsonify({"error": "question 不能为空"}), 400
+
+    user_id = session["user_id"]
+    media_id, err = _require_owned_media(data.get("mediaId"), user_id)
+    if err:
+        return jsonify(err[0]), err[1]
 
     # 多轮追问改写：把「那第二部呢」补成「本季高分作的第二部是什么题材」
     from query_rewrite import rewrite
@@ -566,6 +665,7 @@ def _ingest_video(user_id, filename, data):
 # 上传接口：接收视频文件，存进 MinIO。这是"上传"和"提交文字"的本质区别——
 # 文字用 JSON（application/json），文件用 FormData（multipart/form-data），后端用 request.files 接
 @app.route("/api/upload", methods=["POST"])
+@login_required
 def upload():
     """单文件上传（小视频）。大文件走下面的分片接口。"""
     if "file" not in request.files:
@@ -579,7 +679,7 @@ def upload():
     if ext not in ALLOWED_EXT:
         return jsonify({"error": "不支持的文件格式: " + ext}), 400
 
-    vid, obj, dedup = _ingest_video(session.get("user_id"), filename, f.read())
+    vid, obj, dedup = _ingest_video(session["user_id"], filename, f.read())
     return jsonify({
         "ok": True,
         "videoId": vid,
@@ -593,6 +693,7 @@ def upload():
 # 分片上传 + 断点续传：大文件切成 5MB 一片，Redis/磁盘记已传分片，
 # 弱网中断后前端先查 /status，只补传缺的那几片。
 @app.route("/api/upload/init", methods=["POST"])
+@login_required
 def upload_init():
     """分片上传第一步：登记文件名，返回 uploadId。"""
     data = request.get_json(silent=True) or {}
@@ -603,44 +704,50 @@ def upload_init():
     d = os.path.join(CHUNK_DIR, upload_id)
     os.makedirs(d, exist_ok=True)
     with open(os.path.join(d, "_meta.json"), "w", encoding="utf-8") as f:
-        json.dump({"filename": filename}, f, ensure_ascii=False)
+        # 记下主人：后续分片/查询/合并都校验，否则拿到 uploadId 就能续写别人的上传
+        json.dump({"filename": filename, "user_id": session["user_id"]},
+                  f, ensure_ascii=False)
     return jsonify({"ok": True, "uploadId": upload_id})
 
 
 @app.route("/api/upload/chunk", methods=["POST"])
+@login_required
 def upload_chunk():
     """上传一个分片。index 从 0 开始。"""
     upload_id = request.form.get("uploadId", "")
     index = request.form.get("index", "")
     f = request.files.get("chunk")
-    if not upload_id or not index.isdigit() or not f:
+    if not index.isdigit() or not f:
         return jsonify({"error": "参数不完整"}), 400
-    d = os.path.join(CHUNK_DIR, upload_id)
-    if not os.path.isdir(d):
-        return jsonify({"error": "uploadId 不存在"}), 404
-    f.save(os.path.join(d, "%06d.part" % int(index)))
-    return jsonify({"ok": True, "index": int(index)})
+    idx = int(index)
+    if idx < 0 or idx > 100000:
+        return jsonify({"error": "index 超出范围"}), 400
+    d, err = _chunk_dir_owned(upload_id, session["user_id"])
+    if err:
+        return jsonify(err[0]), err[1]
+    f.save(os.path.join(d, "%06d.part" % idx))
+    return jsonify({"ok": True, "index": idx})
 
 
 @app.route("/api/upload/status", methods=["GET"])
+@login_required
 def upload_status():
     """断点续传：告诉前端哪些分片已经收到了。"""
-    upload_id = request.args.get("uploadId", "")
-    d = os.path.join(CHUNK_DIR, upload_id)
-    if not os.path.isdir(d):
-        return jsonify({"error": "uploadId 不存在"}), 404
+    d, err = _chunk_dir_owned(request.args.get("uploadId", ""), session["user_id"])
+    if err:
+        return jsonify(err[0]), err[1]
     done = sorted(int(n.split(".")[0]) for n in os.listdir(d) if n.endswith(".part"))
     return jsonify({"ok": True, "uploaded": done})
 
 
 @app.route("/api/upload/complete", methods=["POST"])
+@login_required
 def upload_complete():
     """所有分片到齐后合并 → 入库 → 触发解析。"""
     data = request.get_json(silent=True) or {}
-    upload_id = data.get("uploadId") or ""
-    d = os.path.join(CHUNK_DIR, upload_id)
-    if not os.path.isdir(d):
-        return jsonify({"error": "uploadId 不存在"}), 404
+    d, err = _chunk_dir_owned(data.get("uploadId") or "", session["user_id"])
+    if err:
+        return jsonify(err[0]), err[1]
 
     meta_path = os.path.join(d, "_meta.json")
     if not os.path.exists(meta_path):
@@ -656,7 +763,7 @@ def upload_complete():
         with open(os.path.join(d, p), "rb") as f:
             buf.extend(f.read())
 
-    vid, obj, dedup = _ingest_video(session.get("user_id"), filename, bytes(buf))
+    vid, obj, dedup = _ingest_video(session["user_id"], filename, bytes(buf))
     # 合并成功后再清分片，避免"清完才发现入库失败"
     for p in parts:
         try:
@@ -674,13 +781,14 @@ def upload_complete():
 
 
 @app.route("/api/video-status", methods=["GET"])
+@login_required
 def video_status():
     """轮询解析进度：前端上传完调这个看 status/progress。"""
     vid = request.args.get("id", type=int)
     if not vid:
         return jsonify({"error": "id 不能为空"}), 400
     v = storage.query_video(vid)
-    if not v:
+    if not v or v.get("user_id") != session["user_id"]:
         return jsonify({"error": "视频不存在"}), 404
     return jsonify({"video": v})
 
@@ -708,7 +816,9 @@ def playback():
     me = session.get("user_id")
     public_id = settings.get("PUBLIC_MEDIA_ID")
     if v["user_id"] != me and str(v["id"]) != str(public_id or ""):
-        return jsonify({"error": "无权访问"}), 403
+        # 和其余接口一致：越权回 404，不回 403。403 等于承认「id 存在但你不配」，
+        # 可以拿来枚举别人的视频 id；404 不泄露存在性。
+        return jsonify({"error": "视频不存在"}), 404
 
     name = v["object_name"]
     try:
@@ -788,11 +898,13 @@ def health():
 
 # 视频列表接口：工作台左侧显示"该用户上传的视频"，多用户隔离
 @app.route("/api/videos", methods=["GET"])
+@login_required
 def videos():
-    user_id = session.get("user_id")
-    return jsonify({"videos": storage.query_videos(user_id=user_id)})
+    return jsonify({"videos": storage.query_videos(user_id=session["user_id"])})
 
 
 if __name__ == "__main__":
-    # 生产环境不用 debug=True（会暴露调试信息），本地开发才开
-    app.run(host="127.0.0.1", port=8001, debug=False)
+    # 本地默认只听 127.0.0.1（不外暴露）；容器里由 compose 设 HOST=0.0.0.0
+    app.run(host=os.environ.get("HOST", "127.0.0.1"),
+            port=int(os.environ.get("PORT", "8001")),
+            debug=False)

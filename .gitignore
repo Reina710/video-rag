@@ -32,6 +32,8 @@ client/node_modules/
 client/dist/
 
 # 视频与转写产物（大文件，本地生成）
+uploads/
+_chunks/
 frames/
 *.mp4
 *.mkv

@@ -10,6 +10,7 @@ qdrant-client==1.19.1
 dashscope==1.27.7
 jieba==0.42.1
 opencc-python-reimplemented==0.1.7
-numpy==2.5.4
+# numpy 不钉小版本：2.5.x 要求 Python>=3.12，容器基础镜像是 3.11
+numpy>=2.0,<3
 Pillow==13.0.0
 imageio-ffmpeg==0.6.0

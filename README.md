@@ -68,6 +68,9 @@
 ### 多用户与存储
 
 - **多用户**：注册 / 登录 / 登出，登录会话存 Redis，任务记录按用户隔离。
+- **接口鉴权**：数据接口分两层——先看有没有登录，再校验这条记录是不是你的
+  （视频 / 上传会话 / 任务记录）。换一个 id 读不到别人的内容，越权统一回 404 而不是 403，
+  避免被用来枚举资源是否存在；`uploadId` 绑定创建者并做格式校验，挡住 `../` 穿越。
 - **存储抽象层**：SQLite（本地开发）与 MySQL（生产）双后端，SQL 层一致，改环境变量即可切换。
 - **异步落库**：写库走后台队列，不阻塞问答响应。
 - **反馈闭环**：用户对回答点满意 / 不满意，累计计算用户接受率。
@@ -185,17 +188,33 @@ cp .env.example .env
 
 ### 2. 启动中间件
 
-```bash
-docker run -d --name qdrant -p 6333:6333 qdrant/qdrant
-docker run -d --name minio -p 9000:9000 -p 9001:9001 minio/minio server /data --console-address ":9001"
-docker run -d --name redis -p 6379:6379 redis:7-alpine
-```
+一条命令起全套（app + MySQL + Redis + Qdrant + MinIO）：
 
-使用 MySQL 后端时额外启动：
+> 镜像里不带前端产物（`client/dist` 不进仓库）。第一次启动前先在 `client/` 跑一次
+> `npm ci && npm run build`（见第 3 节），否则容器起来了但页面是空的。
 
 ```bash
-docker run -d --name mysql -p 3306:3306 -e MYSQL_ROOT_PASSWORD=<你的密码> -e MYSQL_DATABASE=video_rag mysql:8.0
+docker compose up -d     # 首次会构建镜像
+docker compose ps        # 等 video-rag-app 变成 healthy
 ```
+
+不需要「上传视频自动解析」、只想跑问答时，在 `.env` 里设 `WITH_ASR=0` 再构建，镜像能小一半。
+
+只想起中间件、app 在宿主机跑：
+
+```bash
+docker compose up -d mysql redis qdrant minio
+```
+
+> 容器里 `app` 的中间件地址由 compose 注入成服务名（`qdrant` / `redis` / `minio`）。
+> 所以这类地址在代码里不能硬编码——容器内的 `127.0.0.1` 指的是容器自己。
+
+两个部署时的细节：
+
+- **whisper 模型放在命名卷里**（`video_rag_whisper` → 容器 `/models/small`）。卷为空时 faster-whisper 会自动下载；
+  本机已有缓存可以直接灌进去，重建镜像不会重下：`docker cp <模型目录> video-rag-app:/models/small`。
+- 机器上若已存在同名数据卷（早期用 `docker run` 起的 qdrant / minio），compose 会警告
+  `was not created by Docker Compose` 并继续复用。**数据不会被清空**，可以忽略；全新机器上没有这条警告。
 
 ### 3. 启动服务
 
@@ -216,6 +235,20 @@ npm run build
 ### 4. 准备视频
 
 上传视频后会自动解析（ASR → OCR → 向量化），进度在左侧视频列表显示。
+
+**ASR 词表**：转写质量靠两层，都在 `data/` 下，改完重启生效。
+
+| 文件 | 作用 | 覆盖方式 |
+|---|---|---|
+| `hotwords.txt` | 热词偏置，一行一个词，转写时提前告诉解码器 | `ASR_HOTWORDS="词1 词2"` |
+| `asr_fixups.txt` | 输出层纠错，`错=对` 一行一条 | `ASR_FIXUPS=0` 关闭 |
+
+实测同一段 2 分钟音频、17 个目标专有名词：不带热词命中 2 个，带热词命中 4 个，
+但两版文本差异 11.2%——热词是偏置不是保证，会让部分词变好、部分变差。
+纠错表要谨慎：写错一条规则等于主动制造错误，加规则前先用 `ASR_FIXUPS=0` 看原文。
+
+> 热词只影响新上传的转写；同内容视频命中去重，不会重跑 ASR。
+
 下面的 CLI 仍保留，用于批量/离线处理（参数是视频路径）：
 
 ```bash
@@ -231,6 +264,7 @@ python evaluate.py                      # 端到端：结构化 + 证据核验 +
 python eval_retrieval.py --compare       # 检索层：三种配置 × hit@1/3/5 + MRR + 耗时
 python eval_retrieval.py --content       # 内容级：扩窗前后答案有没有真的进证据
 python -m unittest discover tests -v    # 后端单元测试（检索排序/合并逻辑）
+python scripts/verify_auth.py           # 接口鉴权：未登录 / 越权 / 本人 28 个用例
 ```
 
 端到端结果写入 `evaluation_report.json`。检索评测直接打印汇总表。
@@ -241,6 +275,7 @@ python -m unittest discover tests -v    # 后端单元测试（检索排序/合�
 video-rag
 ├── app.py                    # Flask 入口：20 个路由（问答 / 上传 / 认证 / 反馈 / 健康检查）
 ├── settings.py               # 配置读取：环境变量 > 项目内 .env
+├── asr_lexicon.py            # ASR 词表：热词偏置 + 输出层错字纠正
 ├── agent_loop.py             # Planner / Executor / Critic 主循环
 ├── retrieval.py              # 检索层：向量 + BM25 → RRF → 扩窗 → rerank
 ├── chunks.py                 # 长视频分段摘要（5 分钟一段的"全片目录"）
@@ -251,9 +286,13 @@ video-rag
 ├── evaluate.py               # 端到端评测
 ├── eval_retrieval.py         # 检索层评测（hit@K / recall@K / MRR / 内容级覆盖率）
 ├── tests/                    # 后端单测 22 个（RRF / 扩窗 / 分词 / 繁简 / 命中判定）
+├── scripts/verify_auth.py    # 接口鉴权回归：28 个用例，跑完自动清理
 ├── client/                   # Vue 3 + Vite 前端（含 28 个 vitest 用例）
 ├── requirements.txt          # 服务 + 检索依赖
 ├── requirements-asr.txt      # 额外安装 faster-whisper（转写用）
+├── Dockerfile                # app 镜像（基础层不含 ffmpeg/curl，静态 ffmpeg 由 pip 包提供）
+├── docker-compose.yml        # 一套起 app + MySQL + Redis + Qdrant + MinIO
+├── data/                     # ASR 词表：hotwords.txt / asr_fixups.txt
 ├── .env.example              # 配置模板
 └── .github/workflows/ci.yml  # CI：语法检查 + 后端单测 + 前端测试
 ```

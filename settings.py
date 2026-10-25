@@ -63,3 +63,15 @@ def get(key, default=""):
 def key_status():
     """给 /health 用：关键 key 有没有读到。只报布尔，不返回值本身。"""
     return {k: bool(get(k)) for k in ("DASHSCOPE_KEY", "DEEPSEEK_KEY")}
+
+
+def qdrant_kwargs():
+    """Qdrant 客户端参数。
+
+    本地跑是 127.0.0.1:6333；进了 compose 网络就得写服务名 qdrant，
+    所以地址不能硬编码——否则容器里连的是容器自己的 127.0.0.1。
+    """
+    return {
+        "host": get("QDRANT_HOST", "127.0.0.1"),
+        "port": int(get("QDRANT_PORT", "6333")),
+    }

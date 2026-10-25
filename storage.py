@@ -500,6 +500,19 @@ def query_video_by_hash(content_hash):
     return rows[0] if rows else None
 
 
+def query_task(task_id):
+    """按 id 查一条任务（反馈时校验归属用）。id 不合法直接当不存在。"""
+    try:
+        tid = int(task_id)
+    except (TypeError, ValueError):
+        return None
+    rows = _fetchall(
+        "SELECT id, user_id FROM task_records WHERE id = %s" % _placeholder(1),
+        (tid,),
+    )
+    return rows[0] if rows else None
+
+
 def query_recent_tasks(limit=20, user_id=None):
     """读最近 N 条任务记录（可按用户过滤，多用户隔离）。"""
     if user_id is not None:
