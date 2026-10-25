@@ -47,11 +47,9 @@ if not VIDEO_PATH:
     print("ERROR: 用法 python video_to_text_local.py <视频路径>")
     sys.exit(1)
 
-# 本地模型路径：优先环境变量，其次旧的本地目录，最后让库自己下 small
-MODEL_PATH = settings.get("WHISPER_MODEL_PATH") or (
-    r"C:\Users\11651\tools\whisper-models\models"
-    r"\pengzhendong--faster-whisper-small\snapshots\master"
-)
+# 本地模型路径：优先环境变量，其次项目内 models/small，最后让库自己下
+MODEL_PATH = settings.get("WHISPER_MODEL_PATH") or os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "models", "small")
 if not os.path.isdir(MODEL_PATH):
     MODEL_PATH = "small"
 

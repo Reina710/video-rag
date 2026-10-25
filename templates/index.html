@@ -148,7 +148,7 @@
   </div>
 
   <script>
-    // [面试] 当前模式：'rag' 走 /ask，'agent' 走 /ask_agent
+    // 当前模式：'rag' 走 /ask，'agent' 走 /ask_agent
     let MODE = 'rag';
     function setMode(m) {
       MODE = m;
@@ -163,20 +163,20 @@
     document.getElementById('pick-video').addEventListener('click', () => videoInput.click());
     videoInput.addEventListener('change', function() {
       if (videoInput.files.length) {
-        // [面试] URL.createObjectURL 把本地文件变成可播放的临时 URL，纯前端，不经过后端
+        // URL.createObjectURL 把本地文件变成可播放的临时 URL，纯前端，不经过后端
         player.src = URL.createObjectURL(videoInput.files[0]);
         videoName.textContent = '已加载：' + videoInput.files[0].name;
       }
     });
 
-    // [面试] 点时间戳 → 视频跳到对应秒（start 是毫秒，除以 1000 得秒）
+    // 点时间戳 → 视频跳到对应秒（start 是毫秒，除以 1000 得秒）
     function jumpTo(ms) {
       if (!player.src) { alert('请先在上面选择本地视频，才能跳转'); return; }
       player.currentTime = ms / 1000;
       player.play();
     }
 
-    // [面试] 把 start 毫秒 格式化成 mm:ss
+    // 把 start 毫秒 格式化成 mm:ss
     function fmt(ms) {
       const sec = Math.floor(ms / 1000);
       const mm = String(Math.floor(sec / 60)).padStart(2, '0');
@@ -184,13 +184,13 @@
       return mm + ':' + ss;
     }
 
-    // [面试] 证据来源标签：asr=语音，ocr=画面字幕
+    // 证据来源标签：asr=语音，ocr=画面字幕
     function srcTag(source) {
       if (source === 'ocr') return '<span class="src ocr">画面字幕</span>';
       return '<span class="src asr">语音</span>';
     }
 
-    // [面试] 核心：提问 → 按当前模式调 /ask 或 /ask_agent
+    // 核心：提问 → 按当前模式调 /ask 或 /ask_agent
     async function ask() {
       const input = document.getElementById('question');
       const q = input.value.trim();
@@ -240,7 +240,7 @@
       chat.scrollTop = chat.scrollHeight;
     }
 
-    // [面试] 渲染证据列表：带来源标签 + 可点击跳转的时间戳
+    // 渲染证据列表：带来源标签 + 可点击跳转的时间戳
     // 兼容两种结构：/ask 的 {start,text,source} 和 /ask_agent 的 {timestampMs,content,source}
     function renderHits(hits) {
       if (!hits || !hits.length) return;
@@ -266,7 +266,7 @@
     });
 
     // ---------- 多用户登录 ----------
-    // [面试] 登录态：进页面先查 /me，已登录就显示用户名，否则匿名
+    // 登录态：进页面先查 /me，已登录就显示用户名，否则匿名
     async function refreshAuth() {
       try {
         const r = await fetch('/me');

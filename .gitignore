@@ -12,20 +12,21 @@ venv/
 *.db
 *.db-journal
 
-# 评测产物与临时文件
+# 评测产物与一次性诊断脚本
 evaluation_report.json
 _*.txt
 _*.log
+_*.py
 
 # 转写 / OCR / 调试中间产物
 sentences.json
 frames_ocr.json
 raw_result.json
 
-# 面试与内部记录（本地保留，不进公开仓库）
-docs/面试讲稿.md
-面试备战_Java全栈.md
+# 内部记录（本地保留，不进公开仓库）
+docs/*讲稿*.md
 PROGRESS.md
+*备战*.md
 
 # 前端（Vue/Vite）
 client/node_modules/
