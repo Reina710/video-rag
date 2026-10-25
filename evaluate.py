@@ -2,7 +2,7 @@
 """
 离线评测集 + 跑分器（复现原项目 AgentEvaluationService + OfflineAgentEvaluationRunner）。
 
-为什么要有评测（面试核心，HiDream 挂我的直接原因）：
+为什么要有评测：
   不是"我测了几个问题看着还行"，而是——
   ① 一套【人工标定的标准题目集】(golden set)，每题带期望关键词 + 正/负向判定
   ② 逐题跑 AgentLoop，算出【量化指标】
@@ -25,7 +25,7 @@
 对抗题的意义（HiDream 要的"完整评测"临门一脚）：
   正向题全过只能说明"问什么答什么"，说明不了"不会问什么编什么"。
   负向题专门问视频里不存在的东西，看模型是老实说不知道，还是硬编。
-  这是防幻觉评测最关键、也最常被面试官追问的一环。
+  这是防幻觉评测最关键的一环。
 """
 import json
 import os
@@ -179,10 +179,10 @@ def is_negative_refused(text, deny_keywords):
 
 
 # ---------- 3. 反馈闭环（模拟原项目 userAcceptanceRate） ----------
-# [面试] 原项目有在线用户反馈：真实用户点满意/不满意存 AgentFeedback，
+# 原项目有在线用户反馈：真实用户点满意/不满意存 AgentFeedback，
 # 评测算 userAcceptanceRate。离线项目没真实用户，用【人工标定反馈】模拟：
 # 每道题跑完后，人工（这里就是我）根据答案质量标 rating(1=满意/-1=不满意)。
-# 面试话术：离线项目没上真实用户，反馈闭环用人工复核替代，上线后换成真实点击。
+#话术：离线项目没上真实用户，反馈闭环用人工复核替代，上线后换成真实点击。
 FEEDBACK_LABELS = {
     # 正向题：答对了就满意，答错/漏关键词就不满意
     "新番名称与题材": 1,
@@ -326,7 +326,7 @@ def run_evaluation(tasks=None):
 if __name__ == "__main__":
     summary = run_evaluation()
 
-    # 结果落盘，方便留存 + 面试展示
+    # 结果落盘，方便留存 +展示
     out_path = os.path.join(os.path.dirname(__file__), "evaluation_report.json")
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump(summary, f, ensure_ascii=False, indent=2)

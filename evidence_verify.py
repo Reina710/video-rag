@@ -15,7 +15,7 @@
   supports_claim(segments, claim, evidence) -> bool
       claim 是否和 evidence.claim 逐字相等，且这条证据本身站得住
 
-面试可讲：
+关键设计：
   - 这是"软硬结合"：Critic 用语义审（软），代码用时间戳+原文反查（硬）
   - 杜绝两种幻觉：① 编时间戳（timestamp_covered 兜住）；② 编原文（evidence_supported 兜住）
   - 和我 kb-agent 项目里"防注入"思路一致：关键环节不靠模型自觉，靠代码兜底

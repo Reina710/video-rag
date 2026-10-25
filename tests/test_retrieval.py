@@ -171,6 +171,16 @@ class TestTokenize(unittest.TestCase):
     def test_纯标点被过滤(self):
         self.assertEqual(retrieval._tokenize("，。！？"), [])
 
+    def test_繁体转简体后能对上(self):
+        # ASR 输出繁体、用户提问简体。不归一的话「漫畫」和「漫画」是两个词，
+        # BM25 一条都召不回来，融合反而拉低 Top-1。
+        trad = set(retrieval._tokenize("我最愛的漫畫"))
+        simp = set(retrieval._tokenize("我最爱的漫画"))
+        self.assertTrue(trad & simp, "繁简归一失败：%s vs %s" % (trad, simp))
+
+    def test_繁简归一不只影响查询(self):
+        self.assertIn("漫画", retrieval._tokenize("漫畫"))
+
 
 if __name__ == "__main__":
     unittest.main()

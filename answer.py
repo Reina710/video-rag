@@ -6,7 +6,7 @@
   video_to_text.py（视频->文字） + qdrant_store.py（文字->向量）
   -> 本文件（问题->检索->回答）
 
-面试可讲的点（[面试] 标注）：
+关键设计点：
   - 时间戳不是模型编的，是 Qdrant 检索出来的 payload 自带的（证据绑定）
   - 检索到"最像的几句话"喂给模型，模型只负责组织语言，不负责"找"
 """
@@ -37,7 +37,7 @@ COLLECTION = "video_sentences"
 
 def search(question, limit=3):
     """问题 -> 向量 -> Qdrant 检索 top N 个最像的句子。"""
-    # [面试] 问题必须用"同一个 embedding 模型"转，才能和已存的句子比较
+    # 问题必须用"同一个 embedding 模型"转，才能和已存的句子比较
     qvec = embed_client.embeddings.create(
         model="text-embedding-v3", input=question
     ).data[0].embedding
@@ -59,7 +59,7 @@ def answer(question):
     """完整回答：检索 + 生成。"""
     context, hits = search(question)
 
-    # [面试] 这是 RAG 的核心：把检索到的"证据"塞进提示词，模型照着答
+    # 这是 RAG 的核心：把检索到的"证据"塞进提示词，模型照着答
     system = (
         "你是视频内容问答助手。下面是从视频里检索到的、和用户问题最相关的片段，"
         "每个片段都带时间戳。请只用这些片段回答，并指出答案来自视频的哪个时间点。"

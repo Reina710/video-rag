@@ -8,7 +8,7 @@
 
 faster-whisper 内部会用 ffmpeg 抽音频，所以前提是 ffmpeg 可用。
 
-面试可讲的点（[面试] 标注）：
+关键设计点：
   - 为什么不用 Paraformer 云 API：云 API 只认公网 URL，本地视频要额外"上公网"这一步
   - 为什么不用原版 openai-whisper：强依赖 PyTorch（2GB+），faster-whisper 用 CTranslate2
     量化加速，不需要 torch，速度快 4 倍，内存占用小

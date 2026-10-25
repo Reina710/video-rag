@@ -4,7 +4,7 @@
 上层调用方不关心底层是哪个，只调统一的函数。
 
 为什么做"抽象层"而不是直接写死 MySQL：
-  面试问"为什么用 MySQL"时，正确回答是"多人多机场景下 SQLite 是单文件不共享，
+ 问"为什么用 MySQL"时，正确回答是"多人多机场景下 SQLite 是单文件不共享，
   生产必须换 MySQL"。抽象层的价值：证明你知道存储是可以替换的，
   本地开发图省事用 SQLite，生产改一个环境变量就切 MySQL，SQL 层完全一样。
 
@@ -193,7 +193,7 @@ def _migrate_add_content_hash():
 
 # ---------- 3. 用户（同步，登录/注册需要即时结果） ----------
 def _hash_password(password):
-    """密码哈希（加盐）。面试话术：绝不存明文密码，存 hash，撞库也拿不到原密码。"""
+    """密码哈希（加盐）。原则：绝不存明文密码，存 hash，撞库也拿不到原密码。"""
     salt = os.environ.get("PASSWORD_SALT", "video-rag-salt")  # 生产用随机盐 + bcrypt
     return hashlib.sha256((salt + password).encode("utf-8")).hexdigest()
 
@@ -380,6 +380,20 @@ def query_video(video_id):
         "SELECT id, user_id, filename, object_name, size_bytes, content_hash, status, progress, created_at "
         "FROM videos WHERE id = %s" % _placeholder(1),
         (video_id,),
+    )
+    return rows[0] if rows else None
+
+
+def query_video_by_object_name(object_name):
+    """按 MinIO 对象名反查视频，用于播放接口的归属校验。
+
+    同名对象可能被多个用户上传（去重前），取 id 最小的那一条；
+    真正的权限判断在调用方，这里只负责"这个名字对应哪条记录"。
+    """
+    rows = _fetchall(
+        "SELECT id, user_id, filename, object_name, size_bytes, status "
+        "FROM videos WHERE object_name = %s ORDER BY id ASC" % _placeholder(1),
+        (object_name,),
     )
     return rows[0] if rows else None
 

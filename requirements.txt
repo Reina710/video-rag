@@ -9,6 +9,7 @@ openai==2.54.0
 qdrant-client==1.19.1
 dashscope==1.27.7
 jieba==0.42.1
+opencc-python-reimplemented==0.1.7
 numpy==2.5.4
 Pillow==13.0.0
 imageio-ffmpeg==0.6.0

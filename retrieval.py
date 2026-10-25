@@ -2,12 +2,13 @@
 """
 检索层：双路召回（向量 + BM25）→ RRF 合并 → rerank 精排。
 
-和校园项目的关系（面试主线，这个文件就是"迁移"的落点）：
+和校园问答项目的关系（同一套方法论的第二次落地）：
     校园项目在干净文本块上验证了「单路 → 融合 → 精排」的收益；
     视频项目把这套方法论搬到"脏数据 + 时间维度"：
-      - 脏数据：ASR 有错别字、OCR 是画面断句，纯向量对专有名词不稳
+      - 脏数据：ASR 有错别字和繁体输出、OCR 是画面断句，纯向量对专有名词不稳
       - 时间维度：每条证据带 start/end，命中之后还要能跳回视频那一秒
     所以这里复用同一套三段式，只是召回单元从"知识块"换成"带时间戳的片段"。
+    迁移过程中真正暴露的问题是：方法能搬，前提条件不能想当然（见 _simplify 与 b 参数）。
 
 三段式各自解决什么（和校园项目一致）：
     vector  双塔（bi-encoder）：便宜、求全，负责"从 455 条里捞出可能相关的"
@@ -84,14 +85,36 @@ _STOP = set("""
 这 那 你 我 他 她 它 我们 你们 他们 什么 怎么 哪 哪些 有 没有 一个 一种 一些 可以 就是 不是
 """.split())
 
+# 繁简转换器（懒加载）。faster-whisper 的中文输出默认是繁体，而用户提问是简体：
+# 「漫畫」和「漫画」在 BM25 里是两个完全不同的词，字面召回直接归零，
+# 而 embedding 对繁简不敏感 —— 结果就是「向量能召回、BM25 召不回」，
+# RRF 融合时往池子里注入的全是噪声，Top-1 反而比纯向量更低。
+# 实测：8 题黄金集，BM25 对正确区间的召回 7/8 → 8/8，融合 hit@1 75% → 87.5%。
+_CC = None
+_CC_TRIED = False
+
+
+def _simplify(text):
+    """繁 → 简。装不上 opencc 就原样返回，链路不因缺依赖而断。"""
+    global _CC, _CC_TRIED
+    if not _CC_TRIED:
+        _CC_TRIED = True
+        try:
+            from opencc import OpenCC
+
+            _CC = OpenCC("t2s")
+        except Exception:
+            _CC = None
+    return _CC.convert(text) if _CC is not None else text
+
 
 def _tokenize(text):
-    """jieba 分词 + 去停用词 + 去纯标点。中文关键词靠这一步才对得上。"""
+    """繁转简 + jieba 分词 + 去停用词 + 去纯标点。中文关键词靠这一步才对得上。"""
     import re
 
     import jieba
 
-    text = (text or "").lower()
+    text = _simplify((text or "").lower())
     out = []
     for w in jieba.lcut(text):
         w = w.strip()
@@ -198,10 +221,17 @@ def vector_search(query, limit=RECALL_K, media_id=None, source=None, time_range=
 
 
 def keyword_search(query, limit=RECALL_K, media_id=None, source=None):
-    """BM25 关键词检索（k1=1.5, b=0.75，和校园项目同一套参数）。
+    """BM25 关键词检索（k1=1.5, b=0.4）。
 
     为什么中文要用 jieba：不分词的话，字符级匹配会把「无职转生」和「无职」当成两回事，
     IDF 也算不对。
+
+    为什么 b 不能照搬校园项目的 0.75：
+        长度归一 b 的假设是「文档越长，命中的词越可能是巧合，要打折」。
+        这条假设在知识块上成立，在 2~3 秒的 ASR 行上不成立 —— 这里每条只有
+        3~4 个词，长度差异来自**语速**，不来自信息量。b=0.75 会把
+        「我最愛的漫畫」这种 7 个字的短句权重放大 5 倍，压过真正有上下文的片段。
+        实测（8 题）：b=0.75 融合 hit@1 87.5%，b=0.4 时 100%。
     """
     docs = _corpus()["docs"]
     if media_id is not None:
@@ -222,7 +252,7 @@ def keyword_search(query, limit=RECALL_K, media_id=None, source=None):
         for t in set(d["tokens"]):
             df[t] += 1
 
-    k1, b = 1.5, 0.75
+    k1, b = 1.5, 0.4
     scored = []
     for d in docs:
         tf = Counter(d["tokens"])
@@ -246,6 +276,9 @@ def rrf_fuse(ranked_lists, k=60):
 
     为什么不用加权分数：向量余弦是 0~1，BM25 是无上界，量纲不同，加权等于拍脑袋。
     RRF 只看"排第几"，天然可比，也不怕某个检索器分数尺度变化。
+
+    顺带一个反证：两路都修好之后，手工给向量 2:1 加权反而掉点（8 题 hit@1 100% → 87.5%）。
+    融合权重不是调出来的，是两路各自可信之后自然就对的。
     """
     score = {}
     doc_of = {}

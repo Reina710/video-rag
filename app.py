@@ -9,7 +9,7 @@
   GET  /           首页（简单说明）
   POST /ask        入参 {"question": "..."}，返回 {"answer": "...", "hits": [...]}
 
-面试可讲的点（[面试] 标注）：
+关键设计点：
   - 把三个命令行脚本封装成 REST 服务，是"脚本 -> 产品"的关键一跳
   - /ask 返回的 hits 里带时间戳，前端可以渲染"点击跳转到视频第几秒"
 """
@@ -26,9 +26,9 @@ from qdrant_client import QdrantClient
 from agent_loop import run_agent
 from minio import Minio
 
-# [面试] 落库层：SQLite/MySQL 双后端 + 用户/视频/任务/反馈，异步写（线程队列，对应 RocketMQ 削峰）
+# 落库层：SQLite/MySQL 双后端 + 用户/视频/任务/反馈，异步写（线程队列，对应 RocketMQ 削峰）
 import storage
-# [面试] 自动解析流水线：上传完成后后台跑 ASR → OCR → 向量化，状态回写 videos 表
+# 自动解析流水线：上传完成后后台跑 ASR → OCR → 向量化，状态回写 videos 表
 import pipeline
 # 配置统一入口：os.environ > 项目内 .env（不再读其他项目的绝对路径）
 import settings
@@ -40,7 +40,7 @@ if "127.0.0.1" not in _no_proxy:
     os.environ["NO_PROXY"] = ",".join(filter(None, [_no_proxy, "127.0.0.1", "localhost"]))
     os.environ["no_proxy"] = os.environ["NO_PROXY"]
 
-# [面试] session 存 Redis：登录会话放 Redis，而不是默认的签名 cookie——
+# session 存 Redis：登录会话放 Redis，而不是默认的签名 cookie——
 # 好处：① 服务重启登录态不丢 ② 未来多进程/多机部署时会话共享（这是 Redis 的真实用途，不是"高并发"）
 from flask_session import Session
 import redis
@@ -80,11 +80,11 @@ chat_client = OpenAI(
 )
 qdrant = QdrantClient(host="127.0.0.1", port=6333)
 
-# [面试] Redis 除会话外，还有两个真实用途：热点缓存 + 限流。
+# Redis 除会话外，还有两个真实用途：热点缓存 + 限流。
 # 复用 app.config 里那个 SESSION_REDIS 连接，不另起连接。
 cache = app.config["SESSION_REDIS"]
 
-# [面试] MinIO 对象存储：存用户上传的视频。账号密码从 .env 读，不硬编码
+# MinIO 对象存储：存用户上传的视频。账号密码从 .env 读，不硬编码
 minio_client = Minio(
     os.environ.get("MINIO_ENDPOINT", "127.0.0.1:9000"),
     access_key=os.environ.get("MINIO_ACCESS_KEY", "minioadmin"),
@@ -105,7 +105,7 @@ if not minio_client.bucket_exists(MINIO_BUCKET):
 COLLECTION = "video_sentences"
 
 
-# [面试] 关键词兜底检索：Qdrant 挂了时的降级方案。
+# 关键词兜底检索：Qdrant 挂了时的降级方案。
 # 从 sentences.json / frames_ocr.json 本地按关键词匹配，不依赖向量库。
 # 说明"依赖不可用时服务不瘫"——这是工程里"优雅降级"的思路。
 def _keyword_search(question, limit=3):
@@ -151,8 +151,8 @@ def search(question, limit=3, media_id=None):
     """问题 -> 检索（向量 + BM25 → RRF → 扩窗 → rerank）-> 上下文 + 命中。
 
     media_id：只搜这个视频的证据（多视频隔离）；不传则全库搜。
-    [面试] 和 AgentLoop 走同一套 retrieval.py：两种问答模式如果各用一套检索，
-    面试时讲不清，线上也会出现"同一个问题两种模式答案不一样"。
+    和 AgentLoop 走同一套 retrieval.py：两种问答模式如果各用一套检索，
+   时讲不清，线上也会出现"同一个问题两种模式答案不一样"。
     优雅降级：整条流水线不可用时退化为本地关键词匹配，接口仍能返回结果。
     """
     try:
@@ -166,7 +166,7 @@ def search(question, limit=3, media_id=None):
             "score": round(h.get("rerank", h.get("rrf", h.get("vec", 0.0))), 4),
         } for h in hits]
     except Exception as e:
-        # [面试] 依赖挂了不崩，退化到关键词检索。打印日志便于排查。
+        # 依赖挂了不崩，退化到关键词检索。打印日志便于排查。
         print("[search] 混合检索不可用，降级为关键词检索:", type(e).__name__)
         hit_dicts = _keyword_search(question, limit)
 
@@ -182,7 +182,7 @@ def search(question, limit=3, media_id=None):
 
 
 # ---------- 1.5 Redis 热点缓存 + 令牌桶限流 ----------
-# [面试] 这两个是 Redis 除"会话"外的真实用途，不是"高并发"标签：
+# 这两个是 Redis 除"会话"外的真实用途，不是"高并发"标签：
 #   热点缓存：同一问题重复问，直接返回缓存答案，省 embedding + LLM 的 API 钱
 #   令牌桶限流：防止有人狂刷接口烧 API 钱（每个用户一个桶，容量/速率可调）
 CACHE_TTL = 3600          # 热点答案缓存 1 小时
@@ -250,7 +250,7 @@ def answer(question, media_id=None):
 
 
 # ---------- 3. 接口 ----------
-# [面试] 生产部署：Flask 直接 serve Vue 构建产物（client/dist）。
+# 生产部署：Flask 直接 serve Vue 构建产物（client/dist）。
 # 开发时前端跑 Vite dev server（5173）通过 /api 代理到本后端，互不干扰。
 DIST_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "client", "dist")
 
@@ -270,7 +270,7 @@ def assets(filename):
     return send_from_directory(os.path.join(DIST_DIR, "assets"), filename)
 
 
-# [面试] AgentLoop 版问答：走 Planner -> Executor -> Critic 闭环（最多2轮），
+# AgentLoop 版问答：走 Planner -> Executor -> Critic 闭环（最多2轮），
 # 区别于 /ask 的单轮 RAG。返回结构化产物 + 审核结果。
 @app.route("/api/ask_agent", methods=["POST"])
 def ask_agent():
@@ -280,11 +280,11 @@ def ask_agent():
     if not question:
         return jsonify({"error": "question 不能为空"}), 400
 
-    # [面试] 多轮追问改写（和 /api/ask 同一套）
+    # 多轮追问改写（和 /api/ask 同一套）
     from query_rewrite import rewrite
     search_q, rewritten = rewrite(question, data.get("history") or [])
 
-    # [面试] 限流 + 热点缓存：Agent 链路比单轮 RAG 更烧钱（Planner+Executor+Critic 多轮 LLM），
+    # 限流 + 热点缓存：Agent 链路比单轮 RAG 更烧钱（Planner+Executor+Critic 多轮 LLM），
     # 更需要防刷和缓存兜底。缓存键带 mediaId + 改写后的问题。
     user_key = str(session.get("user_id") or request.remote_addr or "anon")
     if not _rate_limit_allow(user_key):
@@ -303,7 +303,7 @@ def ask_agent():
         result["rewritten"] = search_q
     cost_ms = int((time.time() - t0) * 1000)
 
-    # [面试] 异步落库：记进 SQLite/MySQL（任务记录 + 评测指标），
+    # 异步落库：记进 SQLite/MySQL（任务记录 + 评测指标），
     # 走线程队列不阻塞返回；带 user_id 做多用户隔离（未登录则 None=匿名）
     storage.record_task(
         question=question,
@@ -324,7 +324,7 @@ def ask_agent():
     return jsonify(result)
 
 
-# [面试] SSE 流式问答：把 AgentLoop 每个阶段（检索/Planner/Executor/Critic）
+# SSE 流式问答：把 AgentLoop 每个阶段（检索/Planner/Executor/Critic）
 # 实时推给前端，前端展示「Agent 正在做什么」——对应原项目 DOVideo-AI 的实时进度推送。
 # 核心：run_agent 加 on_event 回调，这里把回调事件转成 SSE 的 data 行。
 @app.route("/api/ask_agent_stream", methods=["POST"])
@@ -339,7 +339,7 @@ def ask_agent_stream():
     if not _rate_limit_allow(user_key):
         return jsonify({"error": "请求太频繁，请稍后再试"}), 429
 
-    # [面试] 多轮追问改写：流开始前算好，前端能先看到"改写成什么"
+    # 多轮追问改写：流开始前算好，前端能先看到"改写成什么"
     from query_rewrite import rewrite
     search_q, rewritten = rewrite(question, data.get("history") or [])
 
@@ -417,7 +417,7 @@ def ask_agent_stream():
     )
 
 
-# [面试] 反馈接口：用户点"满意/不满意"，存进 feedback 表，算 userAcceptanceRate 的数据源
+# 反馈接口：用户点"满意/不满意"，存进 feedback 表，算 userAcceptanceRate 的数据源
 @app.route("/api/feedback", methods=["POST"])
 def feedback():
     data = request.get_json(silent=True) or {}
@@ -432,7 +432,7 @@ def feedback():
 
 @app.route("/api/stats", methods=["GET"])
 def stats():
-    """统计接口：返回最近任务 + 用户接受率，前端/面试演示用（多用户时按登录用户过滤）。"""
+    """统计接口：返回最近任务 + 用户接受率，前端统计页用（多用户时按登录用户过滤）。"""
     user_id = session.get("user_id")
     return jsonify({
         "loggedIn": user_id is not None,
@@ -443,8 +443,8 @@ def stats():
 
 
 # ============ 多用户登录体系 ============
-# [面试] 注册/登录/登出：session 存 Redis，用户隔离是"多用户产品"的前提。
-# 密码只存哈希（storage._hash_password），不存明文——安全基础，面试必讲。
+# 注册/登录/登出：session 存 Redis，用户隔离是"多用户产品"的前提。
+# 密码只存哈希（storage._hash_password），不存明文——安全基础。
 
 @app.route("/api/register", methods=["POST"])
 def register():
@@ -492,7 +492,7 @@ def me():
 
 @app.route("/api/ask", methods=["POST"])
 def ask():
-    # [面试] 前端可能没传 question，或传了非字符串，都要兜住，别让服务崩
+    # 前端可能没传 question，或传了非字符串，都要兜住，别让服务崩
     data = request.get_json(silent=True) or {}
     question = data.get("question", "").strip()
     media_id = data.get("mediaId")
@@ -500,16 +500,16 @@ def ask():
     if not question:
         return jsonify({"error": "question 不能为空"}), 400
 
-    # [面试] 多轮追问改写：把「那第二部呢」补成「本季高分作的第二部是什么题材」
+    # 多轮追问改写：把「那第二部呢」补成「本季高分作的第二部是什么题材」
     from query_rewrite import rewrite
     search_q, rewritten = rewrite(question, history)
 
-    # [面试] 限流：匿名用户用 IP 作 key，登录用户用 user_id，防刷烧 API
+    # 限流：匿名用户用 IP 作 key，登录用户用 user_id，防刷烧 API
     user_key = str(session.get("user_id") or request.remote_addr or "anon")
     if not _rate_limit_allow(user_key):
         return jsonify({"error": "请求太频繁，请稍后再试"}), 429
 
-    # [面试] 热点缓存：同一问题命中缓存直接返回，省 embedding + LLM 的钱。
+    # 热点缓存：同一问题命中缓存直接返回，省 embedding + LLM 的钱。
     # 缓存键要带 mediaId 和改写后的问题，否则 A 视频 / 另一种问法会复用错答案。
     cache_key = "m%s:%s" % (media_id, search_q)
     cached = _cache_get(cache_key)
@@ -519,7 +519,7 @@ def ask():
     try:
         ans, hits = answer(search_q, media_id=media_id)
     except Exception as e:
-        # [面试] 兜住异常，返回可读错误，不把堆栈泄露给前端
+        # 兜住异常，返回可读错误，不把堆栈泄露给前端
         return jsonify({"error": type(e).__name__, "detail": str(e)}), 500
 
     result = {"answer": ans, "hits": hits}
@@ -563,7 +563,7 @@ def _ingest_video(user_id, filename, data):
     return vid, local_name, False
 
 
-# [面试] 上传接口：接收视频文件，存进 MinIO。这是"上传"和"提交文字"的本质区别——
+# 上传接口：接收视频文件，存进 MinIO。这是"上传"和"提交文字"的本质区别——
 # 文字用 JSON（application/json），文件用 FormData（multipart/form-data），后端用 request.files 接
 @app.route("/api/upload", methods=["POST"])
 def upload():
@@ -590,7 +590,7 @@ def upload():
     })
 
 
-# [面试] 分片上传 + 断点续传：大文件切成 5MB 一片，Redis/磁盘记已传分片，
+# 分片上传 + 断点续传：大文件切成 5MB 一片，Redis/磁盘记已传分片，
 # 弱网中断后前端先查 /status，只补传缺的那几片。
 @app.route("/api/upload/init", methods=["POST"])
 def upload_init():
@@ -687,10 +687,30 @@ def video_status():
 
 @app.route("/api/playback")
 def playback():
-    """从 MinIO 流式返回视频，支持 Range（<video> 拖进度条、跳帧都要用）。"""
-    name = request.args.get("name", "")
-    if not name:
-        return jsonify({"error": "name 不能为空"}), 400
+    """从 MinIO 流式返回视频，支持 Range（<video> 拖进度条、跳帧都要用）。
+
+    两个参数二选一：id（推荐，前端拿的是 videoId）或 name（对象名，兼容旧链接）。
+    为什么要先查库再取对象：早期实现直接拿 query 里的 name 去 MinIO 取，
+    谁猜到对象名（比如 demo.mp4）就能拉走别人的视频，属于水平越权。
+    现在对象名只从库里取，并且先校验归属。
+    """
+    vid = request.args.get("id", type=int)
+    raw_name = request.args.get("name", "")
+    if vid:
+        v = storage.query_video(vid)
+    elif raw_name:
+        v = storage.query_video_by_object_name(raw_name)
+    else:
+        return jsonify({"error": "id 或 name 不能为空"}), 400
+    if not v:
+        return jsonify({"error": "视频不存在"}), 404
+
+    me = session.get("user_id")
+    public_id = settings.get("PUBLIC_MEDIA_ID")
+    if v["user_id"] != me and str(v["id"]) != str(public_id or ""):
+        return jsonify({"error": "无权访问"}), 403
+
+    name = v["object_name"]
     try:
         stat = minio_client.stat_object(MINIO_BUCKET, name)
     except Exception:
@@ -766,7 +786,7 @@ def health():
     })
 
 
-# [面试] 视频列表接口：工作台左侧显示"该用户上传的视频"，多用户隔离
+# 视频列表接口：工作台左侧显示"该用户上传的视频"，多用户隔离
 @app.route("/api/videos", methods=["GET"])
 def videos():
     user_id = session.get("user_id")
@@ -774,5 +794,5 @@ def videos():
 
 
 if __name__ == "__main__":
-    # [面试] 生产环境不用 debug=True（会暴露调试信息），本地开发才开
+    # 生产环境不用 debug=True（会暴露调试信息），本地开发才开
     app.run(host="127.0.0.1", port=8001, debug=False)

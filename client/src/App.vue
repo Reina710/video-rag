@@ -81,8 +81,9 @@ function selectVideo(v) {
   if (!v) return
   currentVideo.value = v
   const player = playerRef.value
-  if (player && v.object_name) {
-    player.src = '/api/playback?name=' + encodeURIComponent(v.object_name)
+  // 用 videoId 而不是对象名：播放接口要按 id 校验归属
+  if (player && v.id) {
+    player.src = '/api/playback?id=' + encodeURIComponent(v.id)
     player.load()
   }
 }
