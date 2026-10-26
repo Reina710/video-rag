@@ -239,7 +239,7 @@ def verify_user(username, password):
     return None
 
 
-# ---------- 4. 异步写队列（对应 RocketMQ 削峰） ----------
+# ---------- 4. 异步写队列（等价于消息队列削峰） ----------
 _write_queue = queue.Queue()
 _worker_started = False
 

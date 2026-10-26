@@ -29,7 +29,7 @@ from qdrant_client import QdrantClient
 from agent_loop import run_agent
 from minio import Minio
 
-# 落库层：SQLite/MySQL 双后端 + 用户/视频/任务/反馈，异步写（线程队列，对应 RocketMQ 削峰）
+# 落库层：SQLite/MySQL 双后端 + 用户/视频/任务/反馈，异步写（线程队列，等价于消息队列削峰）
 import storage
 # 自动解析流水线：上传完成后后台跑 ASR → OCR → 向量化，状态回写 videos 表
 import pipeline

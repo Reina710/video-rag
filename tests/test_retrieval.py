@@ -100,7 +100,7 @@ class TestExpandWindows(unittest.TestCase):
 
 
 class TestExpandWindowsOCR(unittest.TestCase):
-    """复现「点过去对不上」的那个 bug：OCR 帧首尾相接导致链式合并。"""
+    """回归用例：OCR 帧首尾相接时不能链式合并（曾出现"点过去对不上"）。"""
 
     def setUp(self):
         # 模拟 OCR：每 30 秒一帧、每帧覆盖 30 秒（真实数据就是这样）
