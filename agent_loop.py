@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-第五步：有证据约束的 AgentLoop（复现原项目 DOVideo-AI 的灵魂）。
+第五步：有证据约束的 AgentLoop。
 
 和 app.py 里单轮 RAG 的区别：
   单轮 RAG：问 -> 检索 -> 答一次，模型说啥就是啥
@@ -311,7 +311,7 @@ def run_agent(goal, on_event=None, media_id=None, chunks=None):
     """AgentLoop 主流程：检索 -> Planner -> (Executor -> Critic) x 最多2轮。
 
     on_event: 可选回调，签名 on_event(dict)。每个阶段开始/结束时调用一次，
-    前端通过 SSE 实时展示「Agent 正在做什么」（对应原项目的实时进度推送）。
+    前端通过 SSE 实时展示「Agent 正在做什么」。
 
     media_id: 只在该视频的证据里检索（多视频隔离）。
     """

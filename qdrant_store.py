@@ -7,7 +7,6 @@
   新版：ASR（sentences.json）+ OCR（frames_ocr.json）双分支，
         每条 point 的 payload 里加 source 字段（"asr" / "ocr"）
 
-这是复现原项目 VideoSegment{transcript + ocrTexts} 的关键——
 两条线各存各的，检索时都能命中，问答时按 source 区分证据来源。
 
 关键设计点：

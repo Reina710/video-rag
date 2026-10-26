@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-离线评测集 + 跑分器（复现原项目 AgentEvaluationService + OfflineAgentEvaluationRunner）。
+离线评测集 + 跑分器。
 
 为什么要有评测：
   不是"我测了几个问题看着还行"，而是——
@@ -8,12 +8,12 @@
   ② 逐题跑 AgentLoop，算出【量化指标】
   ③ 汇总成一张【通过率报告】，含在线反馈闭环
 
-七个指标（前 5 个和原项目一一对应，后 2 个是对抗题的补充）：
+七个指标（前 5 个查产物是否站得住，后 2 个查答案对不对）：
   structuredValid          产物有没有 title/conclusions/evidence（结构完整）
   timestampCoverageRate    证据时间戳是否落在视频片段内（代码兜底核验）
   evidenceSupportRate      证据 content 能否在原文里找到（代码兜底核验）
   claimEvidenceSupportRate 每条结论是否绑定一条 claim 逐字相等且站得住的证据
-  criticPassed             Critic 是否审核通过（原项目有，我之前漏了）
+  criticPassed             Critic 是否审核通过
   keywordCoverage          答案是否覆盖期望关键词（人工标定，仅正向题有意义）
   userAcceptanceRate       用户反馈满意率（在线闭环，离线项目用人工标定反馈模拟）
 
@@ -114,7 +114,7 @@ GOLDEN_TASKS = [
     },
 ]
 
-# 判定阈值（和原项目一致）
+# 判定阈值：结论-证据绑定率和关键词覆盖率都按 0.8 判过
 CLAIM_THRESHOLD = 0.8
 KEYWORD_THRESHOLD = 0.8
 
@@ -152,7 +152,7 @@ def compute_metrics(segments, result, critique):
     claim_check = verify_claim_support(segments, conclusions, evidence)
     claim_rate = claim_check["rate"]
 
-    # criticPassed：Critic 是否审核通过（原项目有，我之前漏了）
+    # criticPassed：Critic 是否审核通过
     critic_passed = bool(critique and critique.get("passed"))
 
     return {
@@ -178,11 +178,10 @@ def is_negative_refused(text, deny_keywords):
     return any(kw.lower() in norm for kw in deny_keywords)
 
 
-# ---------- 3. 反馈闭环（模拟原项目 userAcceptanceRate） ----------
-# 原项目有在线用户反馈：真实用户点满意/不满意存 AgentFeedback，
-# 评测算 userAcceptanceRate。离线项目没真实用户，用【人工标定反馈】模拟：
-# 每道题跑完后，人工（这里就是我）根据答案质量标 rating(1=满意/-1=不满意)。
-#话术：离线项目没上真实用户，反馈闭环用人工复核替代，上线后换成真实点击。
+# ---------- 3. 反馈闭环（userAcceptanceRate） ----------
+# 线上：真实用户点满意/不满意，rating(1/-1) 落 feedback 表，按用户维度算满意率。
+# 离线：没有真实用户，用【人工标定反馈】替代——每道题跑完后按答案质量标 rating，
+# 上线后把这张表换成真实点击即可，指标口径不变。
 FEEDBACK_LABELS = {
     # 正向题：答对了就满意，答错/漏关键词就不满意
     "新番名称与题材": 1,

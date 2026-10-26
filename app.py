@@ -2,8 +2,8 @@
 """
 第四步：把三步串成一个 Web 服务（Flask 后端）。
 
-参考 DOVideo-AI 的接口设计（上传和问答分开），但砍掉鉴权/异步/多模式，
-第一版只留最核心的 /ask：问问题，返回带时间戳的回答。
+上传与问答拆成两组接口：上传只负责建索引，问答只在已建好索引的视频里检索，
+不重复做解析。多用户隔离、异步解析、单轮 / 多轮两种问答模式都在这里收口。
 
 接口：
   GET  /           首页（简单说明）
@@ -408,7 +408,7 @@ def ask_agent():
 
 
 # SSE 流式问答：把 AgentLoop 每个阶段（检索/Planner/Executor/Critic）
-# 实时推给前端，前端展示「Agent 正在做什么」——对应原项目 DOVideo-AI 的实时进度推送。
+# 实时推给前端，前端展示「Agent 正在做什么」。
 # 核心：run_agent 加 on_event 回调，这里把回调事件转成 SSE 的 data 行。
 @app.route("/api/ask_agent_stream", methods=["POST"])
 @login_required

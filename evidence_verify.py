@@ -1,13 +1,13 @@
 # -*- coding: utf-8 -*-
 """
-证据程序化核验（复现原项目 EvidenceVerificationService 的灵魂）。
+证据程序化核验。
 
 为什么要有这一层：
   单靠 Critic（让模型自己审自己）是"软校验"——模型可能睁一只眼闭一只眼，
   甚至编一个时间戳骗过自己。这一层用【代码】去向量库里反查，是"硬校验"：
   证据说"第 90 秒的 OCR 写了 X"，代码就去查——第 90 秒到底有没有这么一段原文？
 
-三个核验函数（和原项目一一对应）：
+三个核验函数：
   timestamp_covered(segments, evidence) -> bool
       证据的 timestampMs 是否真的落在某个 segment 的 [startMs, endMs) 区间内
   evidence_supported(segments, evidence) -> bool

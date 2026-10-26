@@ -5,10 +5,12 @@ OCR 关键帧管线：视频 -> 抽关键帧 -> dHash去重 -> qwen-vl-ocr识别
 输出 frames_ocr.json：[{start毫秒, text}]，和 sentences.json 对齐，
 后面一起存进 Qdrant（多模态双分支：ASR语音 + OCR画面文字）。
 
-和原项目 DOVideo-AI 的对应：
-  原项目：select=gt(scene,0.35) 场景检测 + dHash(汉明距离<=5)去重 + Tesseract OCR
-  本项目：每30秒定时抽帧（简单可靠）+ 同样的dHash去重 + qwen-vl-ocr（比Tesseract准，
-          且传base64不走公网URL，绕开Paraformer那个死结）
+为什么定时抽帧而不是场景检测：
+  场景检测（gt(scene,0.35)）能抓住画面切换点，但阈值对录屏/直播类素材不稳，
+  漏检就整段没字。定时 30 秒抽帧实现简单、覆盖可预期，代价是静止画面会重复抽，
+  交给 dHash 去重兜住（汉明距离 <=5 判重复）。
+  OCR 用 qwen-vl-ocr 而不是 Tesseract：中文识别精度差一个量级，且不用装系统软件；
+  图片走 base64，不依赖公网 URL。
 
 关键设计点：
   - 为什么抽帧而不是逐帧OCR：画面静止时文字不变，逐帧OCR纯浪费钱和时间
