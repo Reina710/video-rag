@@ -85,8 +85,19 @@ def _autoinc():
 
 
 # ---------- 2. 建表 ----------
+_schema_ready = False   # 本进程已建过表就不再跑（MySQL 下每次省 8 次网络往返）
+
+
 def init_db():
-    """建表（幂等）。users/videos/task_records/feedback 四张表。"""
+    """建表（幂等）。首次调用执行，之后直接返回。
+
+    每个读写函数入口都会调它，所以必须廉价：SQLite 是本地文件无所谓，
+    MySQL 每次要 6 条 CREATE TABLE IF NOT EXISTS + 2 条 ALTER，
+    挂在问答路径上就是 8 次 round-trip。
+    """
+    global _schema_ready
+    if _schema_ready:
+        return
     conn = _get_conn()
     cur = conn.cursor()
     ai = _autoinc()
@@ -162,6 +173,8 @@ def init_db():
     # 轻量迁移：旧库的 videos 表没有 content_hash 列时补上（幂等，新库会忽略报错）
     _migrate_add_content_hash()
     _migrate_add_progress()
+
+    _schema_ready = True
 
 
 def _migrate_add_progress():
@@ -244,8 +257,22 @@ _write_queue = queue.Queue()
 _worker_started = False
 
 
+def _is_disconnect(e):
+    """判断是不是"连接已断"（而不是 SQL 写错）。
+
+    MySQL 会按 wait_timeout 主动踢掉空闲连接：后台线程一直握着一个连接不动，
+    几小时后第一次写就报 2006 gone away / 2013 lost connection。
+    这种情况重连一次就能继续，不重连会让整个进程后续写库全部失败。
+    """
+    code = e.args[0] if getattr(e, "args", None) else None
+    return code in (2006, 2013)
+
+
 def _worker_loop():
-    """后台线程：从队列取写库任务，逐条落库。"""
+    """后台线程：从队列取写库任务，逐条落库。
+
+    连接断了就重建再试一次；真写不进去才放弃这一条（并打日志，不再静默吞掉）。
+    """
     conn = _get_conn()
     while True:
         item = _write_queue.get()
@@ -256,8 +283,23 @@ def _worker_loop():
             _insert(conn, table, data)
             conn.commit()
         except Exception as e:
-            print("[storage] 异步落库失败:", type(e).__name__, e)
-            conn.rollback()
+            if _is_disconnect(e):
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+                conn = _get_conn()          # 换一条新连接，这一条重试
+                try:
+                    _insert(conn, table, data)
+                    conn.commit()
+                    continue
+                except Exception as e2:
+                    e = e2
+            print("[storage] 异步落库失败:", table, type(e).__name__, e, flush=True)
+            try:
+                conn.rollback()
+            except Exception:
+                pass
     conn.close()
 
 

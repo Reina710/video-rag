@@ -261,13 +261,12 @@ def search(question, limit=3, media_id=None):
     return context, hit_list
 
 
-# ---------- 1.5 Redis 热点缓存 + 令牌桶限流 ----------
+# ---------- 1.5 Redis 热点缓存 + 滑动窗口限流 ----------
 # 这两个是 Redis 除"会话"外的真实用途，不是"高并发"标签：
 #   热点缓存：同一问题重复问，直接返回缓存答案，省 embedding + LLM 的 API 钱
-#   令牌桶限流：防止有人狂刷接口烧 API 钱（每个用户一个桶，容量/速率可调）
+#   滑动窗口限流：防止有人狂刷接口烧 API 钱（每个用户一个 ZSet，按秒计数）
 CACHE_TTL = 3600          # 热点答案缓存 1 小时
-RATE_LIMIT_CAPACITY = 10  # 令牌桶容量（突发最多 10 次）
-RATE_LIMIT_REFILL = 2     # 每秒补充 2 个令牌
+RATE_LIMIT_CAPACITY = 10  # 1 秒窗口内最多 10 次请求
 
 
 def _cache_get(question):
@@ -290,7 +289,8 @@ def _rate_limit_allow(user_key):
 
     用 Redis 的 ZSet（有序集合）记录每次请求的时间戳，score=时间：
     每次请求先删掉 1 秒前的时间戳，再数当前窗口内已用的次数，
-    超过容量就拒绝。相比令牌桶更直观，且天然原子（pipeline 一次执行）。
+    超过容量就拒绝。比固定窗口平滑（不会在整秒边界放行双倍），
+    也不需要维护令牌补充速率，且天然原子（pipeline 一次执行）。
     """
     key = "rl:" + user_key
     now = time.time()
@@ -693,7 +693,7 @@ def upload():
     })
 
 
-# 分片上传 + 断点续传：大文件切成 5MB 一片，Redis/磁盘记已传分片，
+# 分片上传 + 断点续传：大文件切成 5MB 一片，落磁盘记已传分片，
 # 弱网中断后前端先查 /status，只补传缺的那几片。
 @app.route("/api/upload/init", methods=["POST"])
 @login_required
