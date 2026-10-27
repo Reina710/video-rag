@@ -70,6 +70,17 @@ class TestExpandWindows(unittest.TestCase):
         self.assertEqual(len(out), 1)
         self.assertIn("碧蓝之海", out[0]["text"])
 
+    def test_扩窗后窗口起点早于锚点_对外必须用anchor(self):
+        """窗口往前补上下文，start 会比 anchor 早；展示和跳转只能用 anchor。
+
+        /ask 接口曾经直接取 start 对外，结果时间戳比真实命中位置早 8 秒，
+        点过去听到的是上一句。这条用例锁住"两者不相等"这个前提。
+        """
+        hit = {"start": 4000, "end": 6000, "source": "asr", "text": "碧蓝之海", "media_id": 5}
+        out = retrieval.expand_windows([hit])[0]
+        self.assertEqual(out["anchor"], 4000)
+        self.assertLess(out["start"], out["anchor"])
+
     def test_合并后按原排名排序而不是按时间(self):
         # 第 0 名命中在 6 秒，第 1 名命中在 0 秒。
         # 合并后必须还是 6 秒那条在前（相关性优先）。

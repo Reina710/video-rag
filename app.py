@@ -236,7 +236,10 @@ def search(question, limit=3, media_id=None):
         from retrieval import search as _retrieval_search
         hits = _retrieval_search(question, limit=limit, media_id=media_id, mode="hybrid+rerank")
         hit_dicts = [{
-            "start": h["start"],
+            # 对外的时间戳用 anchor（命中那一句的起点），不是窗口起点。
+            # 窗口往前补了 8 秒上下文，用窗口起点会让展示和跳转都早 8 秒，
+            # 点过去听到的是上一句。OCR 两者相同，ASR 差得最明显。
+            "start": h.get("anchor", h["start"]),
             "end": h["end"],
             "text": h["text"],
             "source": h["source"],
