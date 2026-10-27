@@ -98,6 +98,24 @@ class TestExpandWindows(unittest.TestCase):
         ]
         self.assertEqual(len(retrieval.expand_windows(hits, before_ms=0, after_ms=0)), 2)
 
+    def test_相邻命中合并后文本不重复(self):
+        """两个窗口重叠时，合并只能拼新增句子，不能把整段文本再拼一遍。
+
+        曾经是 `if w["text"] not in last["text"]: last["text"] += w["text"]`，
+        只判断"完全包含"，部分重叠就整段追加 —— 实测 173 字的窗口合并后变成 348 字，
+        同一批句子在上下文里出现两次，白占一半预算，还会挤掉别的时间段。
+        """
+        hits = [
+            {"start": 0, "end": 2000, "source": "asr", "text": "本季最强的", "media_id": 5},
+            {"start": 2000, "end": 4000, "source": "asr", "text": "就是它有星星", "media_id": 5},
+        ]
+        out = retrieval.expand_windows(hits, before_ms=2000, after_ms=8000)
+        self.assertEqual(len(out), 1)
+        parts = [p for p in out[0]["text"].split(" ") if p]
+        self.assertEqual(len(parts), 4)              # 窗口覆盖 4 句
+        self.assertEqual(len(parts), len(set(parts)))  # 且一句都不重复
+        self.assertNotIn("_docs", out[0])            # 内部字段不能漏出去
+
     def test_不同来源不合并(self):
         # ASR 和 OCR 是两条线，混在一起会把语音和画面文字粘成一坨
         hits = [

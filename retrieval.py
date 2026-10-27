@@ -378,6 +378,15 @@ def search(query, limit=5, media_id=None, mode="hybrid", source=None):
     return cands[:limit]
 
 
+def _doc_key(d):
+    """句子的稳定标识，合并窗口时用来去重。
+
+    正常语料带 _corpus() 给的 key（起点 + 来源 + 正文前 40 字）；
+    fallback 分支手工构造的 dict 没有 key，这里现算一个补齐。
+    """
+    return d.get("key") or "%s|%s|%s" % (d["start"], d.get("source", ""), d["text"][:40])
+
+
 def expand_windows(hits, media_id=None, before_ms=WINDOW_BEFORE_MS, after_ms=WINDOW_AFTER_MS):
     """把命中的片段扩成上下文窗口，但**锚点保持不变**。
 
@@ -419,13 +428,17 @@ def expand_windows(hits, media_id=None, before_ms=WINDOW_BEFORE_MS, after_ms=WIN
         # 用"有重叠就收"会把 90 秒那帧的窗口一路拉到 60 秒、30 秒。
         picked = [d for d in group if lo <= d["start"] < hi]
         if not picked:
-            picked = [{"start": h["start"], "end": h["end"], "text": h["text"]}]
+            picked = [{"start": h["start"], "end": h["end"], "text": h["text"],
+                       "source": h["source"]}]
         windows.append({
             "start": min(d["start"] for d in picked),
             "end": max(d["end"] for d in picked),
             "anchor": h["start"],          # ← 点击跳转 / 证据时间戳都用这个
             "source": h["source"],
             "text": " ".join(d["text"] for d in picked),
+            # 合并窗口时要按句子去重，所以原始句子列表要留着，
+            # 不能到那一步再从拼好的字符串里做子串判断
+            "_docs": picked,
             "media_id": mid,
             # 记住这条窗口来自第几名命中：合并后要按这个排回相关性顺序，
             # 否则扩窗会把"最相关"变成"时间最早"，排序信息就丢了
@@ -446,13 +459,24 @@ def expand_windows(hits, media_id=None, before_ms=WINDOW_BEFORE_MS, after_ms=WIN
                 last["start"] = min(last["start"], w["start"])
                 last["anchor"] = min(last["anchor"], w["anchor"])
                 last["rank"] = min(last["rank"], w["rank"])
-                if w["text"] not in last["text"]:
-                    last["text"] += " " + w["text"]
+                # 按句子去重后重拼，不能直接拼字符串：
+                # 锚点差 6 秒、窗口长 28 秒时两条窗口能重叠 22 秒，
+                # "整段拼接"会让同一批句子出现两次（实测文本 173 字变 348 字）。
+                seen = {_doc_key(d) for d in last["_docs"]}
+                for d in w["_docs"]:
+                    k = _doc_key(d)
+                    if k not in seen:
+                        seen.add(k)
+                        last["_docs"].append(d)
+                last["_docs"].sort(key=lambda d: d["start"])
+                last["text"] = " ".join(d["text"] for d in last["_docs"])
                 continue
-        merged.append(dict(w))
+        merged.append(dict(w, _docs=list(w["_docs"])))
 
     # 按相关性排名还原顺序（关键：否则 limit 会取到时间最早的，而不是最相关的）
     merged.sort(key=lambda w: (w["rank"], w["anchor"]))
+    for w in merged:
+        w.pop("_docs", None)   # 内部字段，不往外传
     return merged
 
 
